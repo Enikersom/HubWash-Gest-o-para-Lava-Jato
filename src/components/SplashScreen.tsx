@@ -6,13 +6,13 @@ interface SplashScreenProps {
   duracaoSegundos?: number;
 }
 
-export default function SplashScreen({ onFinish, duracaoSegundos = 5 }: SplashScreenProps) {
+export default function SplashScreen({ onFinish, duracaoSegundos = 0.8 }: SplashScreenProps) {
   const [segundosRestantes, setSegundosRestantes] = useState(duracaoSegundos);
   const [progresso, setProgresso] = useState(0);
 
   useEffect(() => {
     const totalMs = duracaoSegundos * 1000;
-    const intervaloMs = 50;
+    const intervaloMs = 30;
     const incremento = (intervaloMs / totalMs) * 100;
 
     const timerProgresso = setInterval(() => {
@@ -26,38 +26,34 @@ export default function SplashScreen({ onFinish, duracaoSegundos = 5 }: SplashSc
       });
     }, intervaloMs);
 
-    const timerContagem = setInterval(() => {
-      setSegundosRestantes((prev) => {
-        if (prev <= 1) {
-          clearInterval(timerContagem);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
     const timerFinal = setTimeout(() => {
       onFinish();
     }, totalMs);
 
     return () => {
       clearInterval(timerProgresso);
-      clearInterval(timerContagem);
       clearTimeout(timerFinal);
     };
   }, [duracaoSegundos, onFinish]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 flex flex-col items-center justify-between p-6 select-none font-sans text-white h-[100dvh] overflow-hidden">
+    <div 
+      onClick={onFinish}
+      className="fixed inset-0 z-50 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 flex flex-col items-center justify-between p-6 select-none font-sans text-white h-[100dvh] overflow-hidden cursor-pointer"
+      title="Toque em qualquer lugar para entrar imediatamente"
+    >
       {/* Botão sutil de pular no canto superior */}
       <div className="w-full max-w-sm flex justify-end pt-2">
         <button
           type="button"
-          onClick={onFinish}
-          className="text-[11px] font-semibold text-slate-400 hover:text-white px-3.5 py-1.5 rounded-full bg-slate-800/80 hover:bg-slate-700 border border-slate-700/80 transition cursor-pointer flex items-center gap-1.5 backdrop-blur-sm shadow-md"
+          onClick={(e) => {
+            e.stopPropagation();
+            onFinish();
+          }}
+          className="text-[11px] font-semibold text-slate-300 hover:text-white px-3.5 py-1.5 rounded-full bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition cursor-pointer flex items-center gap-1.5 backdrop-blur-sm shadow-md"
           title="Pular Splash Screen"
         >
-          <span>Pular</span>
+          <span>Entrar Agora</span>
           <ArrowRight size={12} />
         </button>
       </div>

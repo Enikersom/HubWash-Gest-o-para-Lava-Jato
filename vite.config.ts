@@ -9,5 +9,17 @@ export default defineConfig({
     port: 3000,
     host: '0.0.0.0',
     hmr: false
+  },
+  build: {
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom'],
+          'vendor-icons': ['lucide-react'],
+          'vendor-firebase': ['firebase/app', 'firebase/firestore']
+        }
+      }
+    }
   }
 });

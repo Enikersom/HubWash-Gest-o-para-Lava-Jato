@@ -37,7 +37,8 @@ import {
   registrarClienteServidor, 
   salvarAgendamentoServidor, 
   excluirAgendamentoServidor,
-  buscarBannersServidor
+  buscarBannersServidor,
+  isApiServidorDisponivel
 } from '../services/apiSync';
 import { BannerPromocional, ServicoLavaJato } from '../types';
 
@@ -154,24 +155,40 @@ export default function AppClientePWA({
   useEffect(() => {
     if (usuarioLogado) {
       localStorage.setItem('hubwash_cliente_sessao', JSON.stringify(usuarioLogado));
+    } else {
+      localStorage.removeItem('hubwash_cliente_sessao');
     }
   }, [usuarioLogado]);
 
   const [telaAtiva, setTelaAtiva] = useState<'cadastro' | 'login' | 'home' | 'agendar' | 'fidelidade'>(() => {
-    const sessaoSalva = localStorage.getItem('hubwash_cliente_sessao');
-    if (sessaoSalva) {
-      return 'home';
-    }
-    if (telaInicial) return telaInicial;
+    // 1. Se telaInicial foi passada explicitamente como 'cadastro' ou 'login'
+    if (telaInicial === 'cadastro' || telaInicial === 'login') return telaInicial;
+
+    // 2. Se a URL tem parâmetro de rota ou unidade (QR code / link)
     try {
       const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
       const r = params?.get('rota')?.toLowerCase();
       const u = params?.get('unidade');
       if (r === 'login') return 'login';
+      // Ao escanear QR Code ou acessar link com unidade, SEMPRE abre a tela de cadastro
       if (r === 'cadastro' || r === 'cliente' || u) return 'cadastro';
     } catch {}
+
+    // 3. Só abre direto na home se não for link/QR code de cadastro e a tela inicial requerida for home
+    const sessaoSalva = typeof window !== 'undefined' ? localStorage.getItem('hubwash_cliente_sessao') : null;
+    if (sessaoSalva && (!telaInicial || telaInicial === 'home')) {
+      return 'home';
+    }
+
     return 'cadastro';
   });
+
+  // Atualiza imediatamente quando a prop telaInicial é alterada pelo componente pai
+  useEffect(() => {
+    if (telaInicial) {
+      setTelaAtiva(telaInicial);
+    }
+  }, [telaInicial]);
 
   // Agendamentos persistentes
   const [todosAgendamentos, setTodosAgendamentos] = useState<Agendamento[]>(() => {
@@ -502,7 +519,7 @@ export default function AppClientePWA({
     };
 
     executarSincronizacao();
-    const interval = setInterval(executarSincronizacao, 3000);
+    const interval = isApiServidorDisponivel() ? setInterval(executarSincronizacao, 4000) : null;
 
     // 2. Escuta agendamentos e clientes em tempo real do Firebase Firestore se disponível
     let unsubAgendamentos: (() => void) | null = null;
@@ -706,7 +723,7 @@ export default function AppClientePWA({
 
     return () => {
       isMontado = false;
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
       if (unsubAgendamentos) unsubAgendamentos();
       if (unsubClientes) unsubClientes();
       if (unsubBanners) unsubBanners();
@@ -884,14 +901,50 @@ export default function AppClientePWA({
     const senhaLimpa = loginSenha.trim();
 
     // Permite login por E-mail, Nome ou WhatsApp
-    const clienteLocalizado = bancoClientes.find(
+    let clienteLocalizado = bancoClientes.find(
       c =>
         (c.email.toLowerCase() === termoLimpo ||
          c.nome.toLowerCase() === termoLimpo ||
          (termoNumeros.length >= 8 && c.contato.replace(/\D/g, '').includes(termoNumeros))) &&
         (c.senhaAcesso === senhaLimpa || !c.senhaAcesso || senhaLimpa.length >= 4) &&
-        (c.unidadeVinculadaId === unidadeIdNormalizada || c.unidadeVinculadaId === unidadeAtual.id)
+        (c.unidadeVinculadaId === unidadeIdNormalizada || c.unidadeVinculadaId === unidadeAtual.id || !c.unidadeVinculadaId)
     );
+
+    // Fallback: busca nos clientes sincronizados do lava jato
+    if (!clienteLocalizado) {
+      try {
+        const salvosFid = localStorage.getItem('hubwash_clientes_fidelidade');
+        if (salvosFid) {
+          const lista = JSON.parse(salvosFid);
+          const achado = Array.isArray(lista) && lista.find((c: any) =>
+            (c.email && c.email.toLowerCase() === termoLimpo) ||
+            (c.nome && c.nome.toLowerCase() === termoLimpo) ||
+            (termoNumeros.length >= 8 && c.telefone && c.telefone.replace(/\D/g, '').includes(termoNumeros))
+          );
+          if (achado) {
+            clienteLocalizado = {
+              nome: achado.nome,
+              email: achado.email || `${termoLimpo}@cliente.com`,
+              senhaAcesso: senhaLimpa || '123456',
+              unidadeVinculadaId: unidadeAtual.id,
+              contato: achado.telefone || '(11) 99999-0000',
+              cep: '01001-000',
+              cidade: 'São Paulo',
+              bairro: 'Centro',
+              estado: 'SP',
+              tipoVeiculo: 'carro',
+              marca: 'Veículo',
+              modelo: achado.veiculoPrincipal || 'Veículo Cadastrado',
+              ano: '2023',
+              placa: '',
+              cor: 'Prata',
+              pontosFidelidade: achado.pontos || 0
+            };
+            setBancoClientes(prev => [...prev.filter(c => c.email.toLowerCase() !== clienteLocalizado!.email.toLowerCase()), clienteLocalizado!]);
+          }
+        }
+      } catch {}
+    }
 
     if (clienteLocalizado) {
       localStorage.setItem('hubwash_cliente_sessao', JSON.stringify(clienteLocalizado));
@@ -899,30 +952,7 @@ export default function AppClientePWA({
       setTelaAtiva('home');
       mostrarToast(`Bem-vindo(a), ${clienteLocalizado.nome}!`, 'sucesso');
     } else {
-      // Cria sessão individual limpa iniciando com 0 pontos
-      const clienteDemo: Cliente = {
-        nome: termoLimpo.includes('@') ? termoLimpo.split('@')[0] : termoLimpo,
-        email: termoLimpo.includes('@') ? termoLimpo : `${termoLimpo.replace(/[^a-z0-9]/g, '')}@email.com`,
-        senhaAcesso: senhaLimpa || '123456',
-        unidadeVinculadaId: unidadeAtual.id,
-        contato: '(11) 98888-7777',
-        cep: '01001-000',
-        cidade: 'São Paulo',
-        bairro: 'Centro',
-        estado: 'SP',
-        tipoVeiculo: 'carro',
-        marca: 'Honda',
-        modelo: 'Civic',
-        ano: '2023',
-        placa: 'BRA2E19',
-        cor: 'Preto',
-        pontosFidelidade: 0 // ➡️ 0 PONTOS
-      };
-      localStorage.setItem('hubwash_cliente_sessao', JSON.stringify(clienteDemo));
-      setBancoClientes(prev => [...prev, clienteDemo]);
-      setUsuarioLogado(clienteDemo);
-      setTelaAtiva('home');
-      mostrarToast(`Acesso autenticado no ${unidadeAtual.nomeFantasia}!`, 'sucesso');
+      mostrarToast(`Cadastro não encontrado no ${unidadeAtual.nomeFantasia}. Verifique seus dados ou cadastre-se.`, 'erro');
     }
 
     // Limpa parâmetro de rota da URL para manter sessão limpa
@@ -1231,6 +1261,7 @@ export default function AppClientePWA({
                 type="button"
                 onClick={() => {
                   setUsuarioLogado(null);
+                  try { localStorage.removeItem('hubwash_cliente_sessao'); } catch {}
                   setTelaAtiva('login');
                   mostrarToast('Sessão encerrada com sucesso.', 'info');
                 }}
@@ -1240,15 +1271,39 @@ export default function AppClientePWA({
                 Sair
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={onVoltarLogin}
-                className="text-[11px] font-bold text-slate-400 hover:text-white bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg transition cursor-pointer flex items-center gap-1"
-                title="Voltar ao Terminal de Acesso"
-              >
-                <ArrowLeft size={12} />
-                <span>Voltar</span>
-              </button>
+              <>
+                {telaAtiva === 'cadastro' && (
+                  <button
+                    type="button"
+                    onClick={() => setTelaAtiva('login')}
+                    className="text-[11px] font-bold text-cyan-400 bg-cyan-500/10 border border-cyan-500/25 px-2.5 py-1 rounded-lg hover:bg-cyan-600 hover:text-white transition cursor-pointer flex items-center gap-1 shadow-sm"
+                    title="Já possui cadastro? Clique para entrar"
+                  >
+                    <LogIn size={12} />
+                    <span>Sou Cliente</span>
+                  </button>
+                )}
+                {telaAtiva === 'login' && (
+                  <button
+                    type="button"
+                    onClick={() => setTelaAtiva('cadastro')}
+                    className="text-[11px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 px-2.5 py-1 rounded-lg hover:bg-emerald-600 hover:text-white transition cursor-pointer flex items-center gap-1 shadow-sm"
+                    title="Ainda não tem conta? Clique para criar"
+                  >
+                    <UserPlus size={12} />
+                    <span>Criar Conta</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onVoltarLogin}
+                  className="text-[11px] font-bold text-slate-400 hover:text-white bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg transition cursor-pointer flex items-center gap-1"
+                  title="Voltar ao Terminal de Acesso"
+                >
+                  <ArrowLeft size={12} />
+                  <span>Voltar</span>
+                </button>
+              </>
             )}
           </div>
         </header>
@@ -1478,9 +1533,10 @@ export default function AppClientePWA({
                     type="button"
                     disabled={isCadastrando}
                     onClick={() => setTelaAtiva('login')}
-                    className="w-full text-center text-[11px] text-slate-400 hover:text-blue-400 pt-1 cursor-pointer"
+                    className="w-full text-center text-xs text-cyan-400 hover:text-cyan-300 font-bold py-2.5 px-3 rounded-xl bg-cyan-500/10 border border-cyan-500/25 hover:bg-cyan-500/20 transition cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
                   >
-                    Já tem conta no {unidadeAtual.nomeFantasia}? Entrar
+                    <LogIn size={14} />
+                    <span>Já sou cliente! Fazer Login</span>
                   </button>
                 </div>
               </form>

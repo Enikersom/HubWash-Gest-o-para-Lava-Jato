@@ -49,11 +49,37 @@ export interface AgendamentoSync {
   createdAt?: string;
 }
 
-// Helper seguro para chamadas à API com timeout e validação de JSON (previne travamento e erro de HTML no Netlify)
+// Flag de disponibilidade da API local (se estiver no Netlify ou host estático sem backend Node, desativa fetch inútil)
+let apiServidorDisponivel: boolean | null = (() => {
+  if (typeof window === 'undefined') return null;
+  const host = window.location.hostname.toLowerCase();
+  if (
+    host.includes('netlify') ||
+    host.includes('.web.app') ||
+    host.includes('.firebaseapp.com') ||
+    host.includes('vercel.app') ||
+    host.includes('github.io') ||
+    localStorage.getItem('hubwash_host_sem_api') === '1'
+  ) {
+    return false;
+  }
+  return null;
+})();
+
+export function isApiServidorDisponivel(): boolean {
+  return apiServidorDisponivel !== false;
+}
+
+// Helper seguro para chamadas à API com timeout curto e validação de JSON (previne travamento no Netlify)
 async function fetchApiSegura(url: string, options: RequestInit = {}): Promise<Response | null> {
+  // Se já sabemos que a API de servidor Node.js não existe neste host (ex: Netlify estático), sai em 0ms
+  if (apiServidorDisponivel === false) {
+    return null;
+  }
+
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2500);
+    const timeoutId = setTimeout(() => controller.abort(), 400);
 
     const res = await fetch(url, {
       ...options,
@@ -63,9 +89,22 @@ async function fetchApiSegura(url: string, options: RequestInit = {}): Promise<R
 
     const contentType = res.headers.get('content-type') || '';
     if (res.ok && contentType.includes('application/json')) {
+      apiServidorDisponivel = true;
       return res;
+    } else {
+      // Se retornou HTML ou erro de rota (comum no Netlify), marca como indisponível para não travar próximas chamadas
+      if (contentType.includes('text/html') || res.status === 404) {
+        apiServidorDisponivel = false;
+        try { localStorage.setItem('hubwash_host_sem_api', '1'); } catch {}
+      }
     }
-  } catch {}
+  } catch {
+    // Se deu timeout ou erro de rede, desativa para não travar a fila do navegador
+    if (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')) {
+      apiServidorDisponivel = false;
+      try { localStorage.setItem('hubwash_host_sem_api', '1'); } catch {}
+    }
+  }
   return null;
 }
 

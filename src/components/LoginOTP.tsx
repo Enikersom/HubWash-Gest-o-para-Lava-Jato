@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { UserPlus, LogIn } from 'lucide-react';
+import { UserPlus, LogIn, Sparkles } from 'lucide-react';
 import { buscarUnidadesServidor } from '../services/apiSync';
-import { db, collection, getDocs } from '../firebase';
+import { db, collection, onSnapshot, getDocs } from '../firebase';
 
 interface LoginOTPProps {
   onSuccess: (role?: 'master' | 'lavajato' | 'cliente', unidadeNome?: string, telaCliente?: 'login' | 'cadastro' | 'home') => void;
@@ -21,42 +21,65 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
 
   const inputsRef = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Carrega lista atualizada de unidades do Firestore e do servidor ao montar tela de login
+  // Cache instantâneo de unidades (carrega na hora do localStorage em 0ms)
+  const [unidadesCadastradas, setUnidadesCadastradas] = useState<any[]>(() => {
+    try {
+      const salvos = localStorage.getItem('hubwash_lava_jatos');
+      if (salvos) {
+        const lista = JSON.parse(salvos);
+        if (Array.isArray(lista) && lista.length > 0) return lista;
+      }
+    } catch {}
+    return [
+      {
+        id: 'pitstop',
+        nomeFantasia: 'Pit Stop Lava Jato',
+        senhaProvisoria: 'pit123',
+        statusPlano: 'ativo'
+      }
+    ];
+  });
+
+  // Atualização suave em segundo plano via onSnapshot do Firestore (não bloqueia a tela)
   useEffect(() => {
-    const carregarUnidades = async () => {
-      let unidadesEncontradas: any[] = [];
+    let unsubscribe: (() => void) | null = null;
 
-      // 1. Tenta buscar do Cloud Firestore
-      if (db) {
-        try {
-          const snap = await getDocs(collection(db, 'unidades'));
-          snap.forEach(docSnap => {
-            unidadesEncontradas.push({ id: docSnap.id, ...docSnap.data() });
-          });
-        } catch (err) {
-          console.warn('Erro ao ler unidades do Firestore no login:', err);
-        }
-      }
-
-      // 2. Tenta buscar do servidor backend se Firestore não trouxe
-      if (unidadesEncontradas.length === 0) {
-        try {
-          const doServidor = await buscarUnidadesServidor();
-          if (Array.isArray(doServidor) && doServidor.length > 0) {
-            unidadesEncontradas = doServidor;
+    if (db) {
+      try {
+        unsubscribe = onSnapshot(collection(db, 'unidades'), (snap) => {
+          if (!snap.empty) {
+            const doFirestore: any[] = [];
+            snap.forEach((docSnap) => {
+              doFirestore.push({ id: docSnap.id, ...docSnap.data() });
+            });
+            if (doFirestore.length > 0) {
+              setUnidadesCadastradas(doFirestore);
+              try {
+                localStorage.setItem('hubwash_lava_jatos', JSON.stringify(doFirestore));
+              } catch {}
+            }
           }
-        } catch {}
+        }, (err) => {
+          console.warn('Listener Firestore unidades (Login):', err);
+        });
+      } catch (e) {
+        console.warn('Erro ao configurar onSnapshot no login:', e);
       }
+    } else {
+      // Fallback API servidor em segundo plano
+      buscarUnidadesServidor().then((doServidor) => {
+        if (Array.isArray(doServidor) && doServidor.length > 0) {
+          setUnidadesCadastradas(doServidor);
+          try {
+            localStorage.setItem('hubwash_lava_jatos', JSON.stringify(doServidor));
+          } catch {}
+        }
+      }).catch(() => {});
+    }
 
-      // 3. Salva no cache local do dispositivo
-      if (unidadesEncontradas.length > 0) {
-        try {
-          localStorage.setItem('hubwash_lava_jatos', JSON.stringify(unidadesEncontradas));
-        } catch {}
-      }
+    return () => {
+      if (unsubscribe) unsubscribe();
     };
-
-    carregarUnidades();
   }, []);
 
   // Focus first input on mount
@@ -132,28 +155,42 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
     if (fullOtp === SENHA_MASTER) {
       setIsVerifying(false);
       setIsSuccess(true);
+      try {
+        localStorage.setItem('hubwash_operador_sessao', JSON.stringify({
+          role: 'master',
+          unidadeNome: 'HubWash Master',
+          timestamp: Date.now()
+        }));
+      } catch {}
       setTimeout(() => {
         onSuccess('master');
-      }, 150);
+      }, 100);
       return;
     }
 
     const fullOtpLower = fullOtp.toLowerCase();
     let unidadeEncontrada: any = null;
 
-    // 2. Verificação INSTANTÂNEA no cache local (0ms de espera)
-    try {
-      const salvos = localStorage.getItem('hubwash_lava_jatos');
-      if (salvos) {
-        const lista = JSON.parse(salvos);
-        if (Array.isArray(lista)) {
-          unidadeEncontrada = lista.find((u: any) => {
-            const senhaSalva = String(u.senhaProvisoria || '').trim();
-            return senhaSalva === fullOtp || senhaSalva.toLowerCase() === fullOtpLower;
-          });
+    // 2. Verificação INSTANTÂNEA no cache local em memória e storage (0ms de espera)
+    unidadeEncontrada = unidadesCadastradas.find((u: any) => {
+      const senhaSalva = String(u.senhaProvisoria || '').trim();
+      return senhaSalva === fullOtp || senhaSalva.toLowerCase() === fullOtpLower;
+    });
+
+    if (!unidadeEncontrada) {
+      try {
+        const salvos = localStorage.getItem('hubwash_lava_jatos');
+        if (salvos) {
+          const lista = JSON.parse(salvos);
+          if (Array.isArray(lista)) {
+            unidadeEncontrada = lista.find((u: any) => {
+              const senhaSalva = String(u.senhaProvisoria || '').trim();
+              return senhaSalva === fullOtp || senhaSalva.toLowerCase() === fullOtpLower;
+            });
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
 
     // 3. Senha padrão de teste do Pit Stop caso não haja banco carregado
     if (!unidadeEncontrada && fullOtpLower === 'pit123') {
@@ -164,7 +201,7 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
       };
     }
 
-    // Se encontrou no cache ou padrão, entra IMEDIATAMENTE sem esperar rede
+    // Se encontrou no cache ou padrão, ENTRA IMEDIATAMENTE (0ms) sem travar a rede
     if (unidadeEncontrada) {
       if (unidadeEncontrada.statusPlano === 'bloqueado') {
         setIsVerifying(false);
@@ -179,19 +216,28 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
 
       setIsVerifying(false);
       setIsSuccess(true);
+      try {
+        localStorage.setItem('hubwash_operador_sessao', JSON.stringify({
+          role: 'lavajato',
+          unidadeNome: unidadeEncontrada.nomeFantasia,
+          unidadeId: unidadeEncontrada.id,
+          timestamp: Date.now()
+        }));
+      } catch {}
+
       setTimeout(() => {
         onSuccess('lavajato', unidadeEncontrada.nomeFantasia);
-      }, 150);
+      }, 100);
       return;
     }
 
-    // 4. Se não achou localmente, busca no Firestore / Servidor com timeout rápido
+    // 4. Se não achou localmente, busca no Firestore / Servidor com timeout estrito de 1.2s (nunca 60s)
     try {
       if (db) {
         try {
           const snap = await Promise.race([
             getDocs(collection(db, 'unidades')),
-            new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500))
+            new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 1200))
           ]);
           if (snap && 'forEach' in snap) {
             snap.forEach((docSnap: any) => {
@@ -209,7 +255,7 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
         try {
           const doServidor = await Promise.race([
             buscarUnidadesServidor(),
-            new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))
+            new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
           ]);
           if (Array.isArray(doServidor) && doServidor.length > 0) {
             unidadeEncontrada = doServidor.find((u: any) => {
@@ -237,13 +283,22 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
 
       setIsVerifying(false);
       setIsSuccess(true);
+      try {
+        localStorage.setItem('hubwash_operador_sessao', JSON.stringify({
+          role: 'lavajato',
+          unidadeNome: unidadeEncontrada.nomeFantasia,
+          unidadeId: unidadeEncontrada.id,
+          timestamp: Date.now()
+        }));
+      } catch {}
+
       setTimeout(() => {
         onSuccess('lavajato', unidadeEncontrada.nomeFantasia);
-      }, 150);
+      }, 100);
     } else {
       setIsVerifying(false);
       setMessage({
-        text: 'Senha incorreta ou inexistente! Verifique os dígitos e tente novamente.',
+        text: 'Senha incorreta ou não encontrada! Verifique o código e tente novamente.',
         type: 'error'
       });
       setOtp(['', '', '', '', '', '']);
@@ -338,6 +393,30 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
             )}
 
             <div className="mt-6 pt-5 border-t border-slate-800 space-y-2.5 text-center">
+              {/* ATALHO RÁPIDO PARA TESTE DO DONO DO LAVA-JATO */}
+              <button
+                type="button"
+                onClick={() => {
+                  preencherSenha('pit123');
+                  setIsVerifying(false);
+                  setIsSuccess(true);
+                  try {
+                    localStorage.setItem('hubwash_operador_sessao', JSON.stringify({
+                      role: 'lavajato',
+                      unidadeNome: 'Pit Stop Lava Jato',
+                      unidadeId: 'pitstop',
+                      timestamp: Date.now()
+                    }));
+                  } catch {}
+                  onSuccess('lavajato', 'Pit Stop Lava Jato');
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 hover:text-white border border-blue-500/40 font-bold text-xs uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-2 shadow-sm"
+                title="Acesso Imediato para Dono do Lava Jato (Modo Teste / Demonstração)"
+              >
+                <Sparkles size={15} className="text-blue-400" />
+                <span>Entrar como Dono em Teste (Pit Stop)</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => onSuccess('cliente', getPrimeiraUnidade(), 'login')}

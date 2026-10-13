@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { AlertCircle, ArrowLeft } from 'lucide-react';
 import {
   db,
@@ -15,10 +15,12 @@ import {
   firebaseConfig
 } from './firebase';
 import LoginOTP from './components/LoginOTP';
-import AdminMaster from './components/AdminMaster';
-import PainelLavaJato from './components/PainelLavaJato';
-import AppClientePWA from './components/AppClientePWA';
 import SplashScreen from './components/SplashScreen';
+
+// Lazy loading para arranque ultrarrápido (0ms no Netlify e mobile)
+const AdminMaster = lazy(() => import('./components/AdminMaster'));
+const PainelLavaJato = lazy(() => import('./components/PainelLavaJato'));
+const AppClientePWA = lazy(() => import('./components/AppClientePWA'));
 
 export { db, collection, addDoc, onSnapshot, doc, setDoc, updateDoc, deleteDoc, query, where, orderBy, firebaseConfig };
 
@@ -83,33 +85,76 @@ function resolverNomeUnidade(slugParam: string | null): string {
 export default function App() {
   const unidadeSlug = getParamSafe('unidade');
   const rotaSlug = getParamSafe('rota');
+  const modoSlug = getParamSafe('modo');
+  const painelParam = getParamSafe('painel');
 
-  // Inicialização inteligente com base na URL: se houver unidade na URL (QR Code), vai direto para o cliente
+  // Verifica se é uma rota direta para o painel do dono do lava jato
+  const isRotaPainelDireto = Boolean(
+    modoSlug === 'painel' || 
+    painelParam === '1' || 
+    painelParam === 'true' || 
+    (unidadeSlug && (modoSlug === 'painel' || painelParam))
+  );
+
+  // Lê sessão salva do operador (Dono do Lava Jato ou Admin Master)
+  const sessaoOperadorSalva = (() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const salvo = localStorage.getItem('hubwash_operador_sessao');
+        if (salvo) {
+          const parsed = JSON.parse(salvo);
+          if (parsed && (parsed.role === 'lavajato' || parsed.role === 'master')) {
+            return parsed;
+          }
+        }
+      }
+    } catch {}
+    return null;
+  })();
+
+  // Inicialização inteligente e ultrarrápida:
+  // 1. Se tem unidade na URL SEM modo painel -> Abre App do Cliente (0ms)
+  // 2. Se tem rota direta para o painel -> Abre Painel Lava Jato (0ms)
+  // 3. Se tem sessão de operador salva -> Abre Painel Lava Jato ou Master direto (0ms)
+  // 4. Caso contrário -> Terminal Login OTP
   const [autenticado, setAutenticado] = useState<boolean>(() => {
-    return Boolean(unidadeSlug);
+    if (isRotaPainelDireto) return true;
+    if (unidadeSlug) return true;
+    return Boolean(sessaoOperadorSalva);
   });
   
   const [telaAtual, setTelaAtual] = useState<'lavajato' | 'master' | 'cliente'>(() => {
-    return Boolean(unidadeSlug) ? 'cliente' : 'master';
+    if (isRotaPainelDireto) return 'lavajato';
+    if (unidadeSlug) return 'cliente';
+    if (sessaoOperadorSalva) return sessaoOperadorSalva.role;
+    return 'lavajato';
   });
 
   const [telaClienteInicial, setTelaClienteInicial] = useState<'login' | 'cadastro' | 'home'>(() => {
+    if (rotaSlug === 'login') return 'login';
+    // Correção: quando acessa via link ou QR code da unidade, SEMPRE abre na tela de cadastro!
+    if (unidadeSlug || rotaSlug === 'cadastro') return 'cadastro';
     const sessaoSalva = typeof window !== 'undefined' ? localStorage.getItem('hubwash_cliente_sessao') : null;
     if (sessaoSalva) return 'home';
-    if (rotaSlug === 'login') return 'login';
     return 'cadastro';
   });
 
   const [unidadeSelecionada, setUnidadeSelecionada] = useState<string>(() => {
-    return resolverNomeUnidade(unidadeSlug);
+    if (unidadeSlug) return resolverNomeUnidade(unidadeSlug);
+    if (sessaoOperadorSalva && sessaoOperadorSalva.unidadeNome) return sessaoOperadorSalva.unidadeNome;
+    return 'Pit Stop Lava Jato';
   });
 
   const [erroApp, setErroApp] = useState<string | null>(null);
   const [mostrarSplash, setMostrarSplash] = useState<boolean>(() => {
+    // Acesso direto, via QR Code ou operador salvo abre imediatamente (0ms) sem splash
+    if (unidadeSlug || isRotaPainelDireto || sessaoOperadorSalva || rotaSlug) {
+      return false;
+    }
     try {
       return !sessionStorage.getItem('hubwash_splash_viewed');
     } catch {
-      return true;
+      return false;
     }
   });
 
@@ -118,25 +163,33 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const uParam = params.get('unidade');
     const rParam = params.get('rota');
+    const mParam = params.get('modo');
+    const pParam = params.get('painel');
+
+    if (mParam === 'painel' || pParam === '1' || pParam === 'true') {
+      setAutenticado(true);
+      setTelaAtual('lavajato');
+      if (uParam) {
+        setUnidadeSelecionada(resolverNomeUnidade(uParam.trim().toLowerCase()));
+      }
+      return;
+    }
 
     if (uParam) {
       setAutenticado(true);
       setTelaAtual('cliente');
       setUnidadeSelecionada(resolverNomeUnidade(uParam.trim().toLowerCase()));
 
-      const sessaoSalva = localStorage.getItem('hubwash_cliente_sessao');
-
-      if (sessaoSalva) {
-        setTelaClienteInicial('home');
-      } else if (rParam?.toLowerCase() === 'login') {
+      if (rParam?.toLowerCase() === 'login') {
         setTelaClienteInicial('login');
       } else {
+        // Correção de rota: ao acessar link ou escanear QR Code, SEMPRE abre a tela de CADASTRO
         setTelaClienteInicial('cadastro');
       }
     }
   }, []);
 
-  // TELA SPLASH SCREEN (RÁPIDA E ELEGANTE)
+  // TELA SPLASH SCREEN (ULTRARRÁPIDA E ELEGANTE - 0.4s apenas na raiz pura)
   if (mostrarSplash) {
     return (
       <SplashScreen 
@@ -146,7 +199,7 @@ export default function App() {
           } catch {}
           setMostrarSplash(false);
         }} 
-        duracaoSegundos={2.5} 
+        duracaoSegundos={0.4} 
       />
     );
   }
@@ -180,6 +233,14 @@ export default function App() {
     );
   }
 
+  // Fallback de carregamento rápido dos módulos em lazy
+  const fallbackLoading = (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white p-4">
+      <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+      <span className="text-xs text-slate-400 font-medium tracking-wide">Carregando HubWash...</span>
+    </div>
+  );
+
   // TELA DE AUTENTICAÇÃO / LOGIN OTP
   if (!autenticado) {
     return (
@@ -206,44 +267,58 @@ export default function App() {
   // TELA: APLICATIVO DO CLIENTE (PWA)
   if (telaAtual === 'cliente') {
     return (
-      <AppClientePWA
-        unidadeNome={unidadeSelecionada}
-        telaInicial={telaClienteInicial}
-        onVoltarLogin={() => {
-          setAutenticado(false);
-        }}
-      />
+      <Suspense fallback={fallbackLoading}>
+        <AppClientePWA
+          unidadeNome={unidadeSelecionada}
+          telaInicial={telaClienteInicial}
+          onVoltarLogin={() => {
+            setAutenticado(false);
+          }}
+        />
+      </Suspense>
     );
   }
 
   // TELA: ADMIN MASTER (HUBWASH)
   if (telaAtual === 'master') {
     return (
-      <AdminMaster
-        onLogout={() => {
-          setAutenticado(false);
-        }}
-        onIrParaLavaJato={(nome?: string) => {
-          if (nome) setUnidadeSelecionada(nome);
-          setTelaAtual('lavajato');
-        }}
-        onIrParaCliente={(nome?: string) => {
-          if (nome) setUnidadeSelecionada(nome);
-          setTelaClienteInicial('home');
-          setTelaAtual('cliente');
-        }}
-      />
+      <Suspense fallback={fallbackLoading}>
+        <AdminMaster
+          onLogout={() => {
+            try {
+              localStorage.removeItem('hubwash_operador_sessao');
+            } catch {}
+            setAutenticado(false);
+            setTelaAtual('lavajato');
+          }}
+          onIrParaLavaJato={(nome?: string) => {
+            if (nome) setUnidadeSelecionada(nome);
+            setTelaAtual('lavajato');
+          }}
+          onIrParaCliente={(nome?: string) => {
+            if (nome) setUnidadeSelecionada(nome);
+            setTelaClienteInicial('cadastro');
+            setTelaAtual('cliente');
+          }}
+        />
+      </Suspense>
     );
   }
 
   // TELA: PAINEL OPERACIONAL LAVA JATO
   return (
-    <PainelLavaJato
-      unidadeNome={unidadeSelecionada}
-      onLogout={() => {
-        setAutenticado(false);
-      }}
-    />
+    <Suspense fallback={fallbackLoading}>
+      <PainelLavaJato
+        unidadeNome={unidadeSelecionada}
+        onLogout={() => {
+          try {
+            localStorage.removeItem('hubwash_operador_sessao');
+          } catch {}
+          setAutenticado(false);
+          setTelaAtual('lavajato');
+        }}
+      />
+    </Suspense>
   );
 }
 

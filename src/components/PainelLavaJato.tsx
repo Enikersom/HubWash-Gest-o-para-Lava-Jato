@@ -66,7 +66,8 @@ import {
   buscarServicosServidor,
   salvarServicoServidor,
   atualizarServicoServidor,
-  excluirServicoServidor
+  excluirServicoServidor,
+  isApiServidorDisponivel
 } from '../services/apiSync';
 import { URL_BASE_NETLIFY } from '../App';
 import {
@@ -391,17 +392,21 @@ export default function PainelLavaJato({
     try {
       let carregados = 0;
 
-      // 1. Tenta buscar no Firebase Firestore
+      // 1. Tenta buscar no Firebase Firestore com timeout de segurança
       if (db) {
         try {
-          const snap = await getDocs(collection(db, 'agendamentos'));
-          const agsFirestore: AgendamentoPWA[] = [];
-          snap.forEach((docSnap) => {
-            const data = docSnap.data();
-            const docUnidade = String(data.unidadeId || data.unidadeVinculadaId || data.unidadeSlug || data.unidadeNome || '').toLowerCase();
-            const pertence = !docUnidade || aliasesUnidade.some(alias => 
-              docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
-            );
+          const snap: any = await Promise.race([
+            getDocs(collection(db, 'agendamentos')),
+            new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))
+          ]);
+          if (snap && 'forEach' in snap) {
+            const agsFirestore: AgendamentoPWA[] = [];
+            snap.forEach((docSnap: any) => {
+              const data = docSnap.data();
+              const docUnidade = String(data.unidadeId || data.unidadeVinculadaId || data.unidadeSlug || data.unidadeNome || '').toLowerCase();
+              const pertence = !docUnidade || aliasesUnidade.some(alias => 
+                docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
+              );
 
             if (pertence) {
               const veiculoFormatado = data.veiculo || (data.modelo ? `${data.modelo}${data.placa ? ` (${data.placa})` : ''}` : 'Veículo Agendado');
@@ -433,10 +438,11 @@ export default function PainelLavaJato({
             });
             carregados += agsFirestore.length;
           }
-        } catch (fErr) {
-          console.warn('Erro Firestore busca manual:', fErr);
         }
+      } catch (fErr) {
+        console.warn('Erro Firestore busca manual:', fErr);
       }
+    }
 
       // 2. Tenta servidor central se houver
       try {
@@ -667,7 +673,7 @@ export default function PainelLavaJato({
     };
 
     sincronizarComServidor();
-    const intervalId = setInterval(sincronizarComServidor, 4000);
+    const intervalId = isApiServidorDisponivel() ? setInterval(sincronizarComServidor, 4000) : null;
 
     // 2. Ouvintes em tempo real do Firebase Firestore (Canal direto PC <-> Mobile)
     let unsubClientes: (() => void) | null = null;
@@ -890,7 +896,7 @@ export default function PainelLavaJato({
 
     return () => {
       ativo = false;
-      clearInterval(intervalId);
+      if (intervalId) clearInterval(intervalId);
       if (unsubClientes) unsubClientes();
       if (unsubAgendamentos) unsubAgendamentos();
       if (unsubBanners) unsubBanners();
