@@ -1,0 +1,8 @@
+{
+  "name": "Sistema de Gestão para Lava Jato",
+  "description": "Sistema completo para gestão de lava-jatos com fila em tempo real, agendamentos PWA, checklist de vistoria, comissões automáticas, caixa diário e painel administrativo master.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

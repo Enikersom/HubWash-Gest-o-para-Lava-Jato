@@ -1,0 +1,121 @@
+{
+  "entities": {
+    "Cliente": {
+      "title": "Cliente",
+      "description": "Dados cadastrais do cliente vinculado à unidade de lava-jato",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string", "maxLength": 150 },
+        "email": { "type": "string", "maxLength": 150 },
+        "senhaAcesso": { "type": "string", "maxLength": 100 },
+        "unidadeVinculadaId": { "type": "string", "maxLength": 100 },
+        "contato": { "type": "string", "maxLength": 50 },
+        "cep": { "type": "string", "maxLength": 20 },
+        "cidade": { "type": "string", "maxLength": 100 },
+        "bairro": { "type": "string", "maxLength": 100 },
+        "estado": { "type": "string", "maxLength": 10 },
+        "tipoVeiculo": { "type": "string", "enum": ["carro", "moto"] },
+        "marca": { "type": "string", "maxLength": 100 },
+        "modelo": { "type": "string", "maxLength": 100 },
+        "ano": { "type": "string", "maxLength": 20 },
+        "placa": { "type": "string", "maxLength": 20 },
+        "cor": { "type": "string", "maxLength": 50 },
+        "pontosFidelidade": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["nome", "email", "unidadeVinculadaId", "modelo", "placa"]
+    },
+    "Agendamento": {
+      "title": "Agendamento",
+      "description": "Agendamento de serviço de lavagem",
+      "type": "object",
+      "properties": {
+        "unidadeId": { "type": "string", "maxLength": 100 },
+        "cliente": { "type": "string", "maxLength": 150 },
+        "email": { "type": "string", "maxLength": 150 },
+        "telefone": { "type": "string", "maxLength": 50 },
+        "veiculo": { "type": "string", "maxLength": 150 },
+        "servico": { "type": "string", "maxLength": 150 },
+        "data": { "type": "string", "maxLength": 30 },
+        "horario": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "maxLength": 50 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["unidadeId", "veiculo", "servico", "data", "horario", "status"]
+    },
+    "Unidade": {
+      "title": "Unidade",
+      "description": "Dados da unidade de lava-jato cadastrada no SaaS",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nomeFantasia": { "type": "string" },
+        "nomeProprietario": { "type": "string" },
+        "razaoSocial": { "type": "string" },
+        "cnpj": { "type": "string" },
+        "endereco": { "type": "string" },
+        "contato": { "type": "string" },
+        "senhaProvisoria": { "type": "string" },
+        "valorPlano": { "type": "number" },
+        "dataCriacao": { "type": "string" },
+        "dataExpiracao": { "type": "string" },
+        "statusPlano": { "type": "string", "enum": ["ativo", "teste", "bloqueado"] }
+      },
+      "required": ["id", "nomeFantasia", "senhaProvisoria", "statusPlano"]
+    },
+    "Banner": {
+      "title": "Banner",
+      "description": "Banner promocional do lava-jato exibido no app do cliente",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "titulo": { "type": "string" },
+        "status": { "type": "string", "enum": ["Ativo", "Inativo"] },
+        "imagem": { "type": "string" },
+        "link": { "type": "string" },
+        "unidadeId": { "type": "string" },
+        "descricao": { "type": "string" },
+        "desconto": { "type": "string" }
+      },
+      "required": ["titulo", "status", "imagem"]
+    },
+    "Servico": {
+      "title": "Servico",
+      "description": "Serviços e tabelas de valores oferecidos pelo lava-jato",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nome": { "type": "string" },
+        "valor": { "type": "number" },
+        "tempoMedioMinutos": { "type": "number" },
+        "descricao": { "type": "string" },
+        "categoria": { "type": "string" },
+        "ativo": { "type": "boolean" },
+        "unidadeId": { "type": "string" }
+      },
+      "required": ["nome", "valor", "ativo"]
+    }
+  },
+  "firestore": {
+    "/clientes/{clienteId}": {
+      "schema": { "$ref": "#/entities/Cliente" },
+      "description": "Coleção de clientes cadastrados"
+    },
+    "/agendamentos/{agendamentoId}": {
+      "schema": { "$ref": "#/entities/Agendamento" },
+      "description": "Coleção de agendamentos em tempo real"
+    },
+    "/unidades/{unidadeId}": {
+      "schema": { "$ref": "#/entities/Unidade" },
+      "description": "Coleção de unidades e lava-jatos cadastrados"
+    },
+    "/banners/{bannerId}": {
+      "schema": { "$ref": "#/entities/Banner" },
+      "description": "Coleção de banners promocionais sincronizados"
+    },
+    "/servicos/{servicoId}": {
+      "schema": { "$ref": "#/entities/Servico" },
+      "description": "Coleção de serviços e preços do lava-jato"
+    }
+  }
+}

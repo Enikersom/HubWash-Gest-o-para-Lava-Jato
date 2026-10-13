@@ -1,0 +1,45 @@
+{
+  "clientes": [],
+  "agendamentos": [
+    {
+      "cliente": "Emilio Cliente Teste",
+      "telefone": "(11) 98765-4321",
+      "veiculo": "Honda Civic (ABC-1234)",
+      "servico": "Lavagem Completa + Cera",
+      "data": "2026-10-06",
+      "horario": "14:00",
+      "unidadeId": "pitstop",
+      "status": "Pendente",
+      "id": "ag_1791292203954_j4e5d",
+      "createdAt": "2026-10-06T13:10:03.954Z"
+    }
+  ],
+  "fila": [],
+  "historico": [],
+  "lavaJatos": [
+    {
+      "id": "pitstop",
+      "nomeFantasia": "Pit Stop Lava Jato",
+      "nomeProprietario": "Carlos Silva",
+      "razaoSocial": "C. Silva Lavagens LTDA",
+      "cnpj": "12.345.678/0001-99",
+      "endereco": "Av. Central, 1500 - Centro",
+      "contato": "(11) 99999-8888",
+      "senhaProvisoria": "pit123",
+      "valorPlano": 149.9,
+      "dataCriacao": "05/10/2026",
+      "dataExpiracao": "05/10/2027",
+      "statusPlano": "ativo"
+    }
+  ],
+  "banners": [
+    {
+      "titulo": "Super Ducha com Cera",
+      "status": "Ativo",
+      "imagem": "https://images.unsplash.com/photo-1520340356584-f9917d1eea6f?w=600",
+      "desconto": "15% OFF",
+      "id": "banner_1791227639483",
+      "createdAt": "2026-10-05T19:13:59.483Z"
+    }
+  ]
+}
