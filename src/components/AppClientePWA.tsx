@@ -138,7 +138,23 @@ export default function AppClientePWA({
 
   // Usuário logado na sessão do cliente
   const [usuarioLogado, setUsuarioLogado] = useState<Cliente | null>(() => {
-    const salvo = localStorage.getItem('hubwash_cliente_sessao');
+    // ➡️ REGRA CRÍTICA: Se a rota ou tela inicial for 'cadastro' ou 'login' (ex: QR Code ou link), NUNCA restaura usuário de sessões antigas
+    if (telaInicial === 'cadastro' || telaInicial === 'login') {
+      try { localStorage.removeItem('hubwash_cliente_sessao'); } catch {}
+      return null;
+    }
+
+    try {
+      if (typeof window !== 'undefined') {
+        const urlStr = (window.location.search + ' ' + window.location.hash + ' ' + window.location.pathname).toLowerCase();
+        if (urlStr.includes('cadastro') || urlStr.includes('login') || urlStr.includes('unidade=')) {
+          try { localStorage.removeItem('hubwash_cliente_sessao'); } catch {}
+          return null;
+        }
+      }
+    } catch {}
+
+    const salvo = typeof window !== 'undefined' ? localStorage.getItem('hubwash_cliente_sessao') : null;
     if (salvo) {
       try {
         return JSON.parse(salvo);
@@ -161,22 +177,22 @@ export default function AppClientePWA({
   }, [usuarioLogado]);
 
   const [telaAtiva, setTelaAtiva] = useState<'cadastro' | 'login' | 'home' | 'agendar' | 'fidelidade'>(() => {
-    // 1. Se telaInicial foi passada explicitamente como 'cadastro' ou 'login'
-    if (telaInicial === 'cadastro' || telaInicial === 'login') return telaInicial;
+    // 1. Prioridade máxima: verificação explícita do telaInicial repassado pelo App.tsx
+    if (telaInicial === 'login') return 'login';
+    if (telaInicial === 'cadastro') return 'cadastro';
 
     // 2. Se a URL tem parâmetro de rota ou unidade (QR code / link)
     try {
-      const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-      const r = params?.get('rota')?.toLowerCase();
-      const u = params?.get('unidade');
-      if (r === 'login') return 'login';
-      // Ao escanear QR Code ou acessar link com unidade, SEMPRE abre a tela de cadastro
-      if (r === 'cadastro' || r === 'cliente' || u) return 'cadastro';
+      if (typeof window !== 'undefined') {
+        const urlStr = (window.location.search + ' ' + window.location.hash + ' ' + window.location.pathname).toLowerCase();
+        if (urlStr.includes('login') && !urlStr.includes('cadastro')) return 'login';
+        if (urlStr.includes('cadastro') || urlStr.includes('unidade=')) return 'cadastro';
+      }
     } catch {}
 
-    // 3. Só abre direto na home se não for link/QR code de cadastro e a tela inicial requerida for home
+    // 3. Só abre em home se houver usuário com sessão ativa E telaInicial for 'home'
     const sessaoSalva = typeof window !== 'undefined' ? localStorage.getItem('hubwash_cliente_sessao') : null;
-    if (sessaoSalva && (!telaInicial || telaInicial === 'home')) {
+    if (sessaoSalva && telaInicial === 'home') {
       return 'home';
     }
 
@@ -185,8 +201,14 @@ export default function AppClientePWA({
 
   // Atualiza imediatamente quando a prop telaInicial é alterada pelo componente pai
   useEffect(() => {
-    if (telaInicial) {
-      setTelaAtiva(telaInicial);
+    if (telaInicial === 'cadastro') {
+      setTelaAtiva('cadastro');
+      setUsuarioLogado(null);
+      try { localStorage.removeItem('hubwash_cliente_sessao'); } catch {}
+    } else if (telaInicial === 'login') {
+      setTelaAtiva('login');
+      setUsuarioLogado(null);
+      try { localStorage.removeItem('hubwash_cliente_sessao'); } catch {}
     }
   }, [telaInicial]);
 
@@ -349,6 +371,31 @@ export default function AppClientePWA({
   const [cadPlaca, setCadPlaca] = useState('');
   const [cadCor, setCadCor] = useState('');
 
+  // Limpa completamente todos os campos para impedir que venha preenchido e-mail e senha de outro usuário
+  const limparCamposCadastro = () => {
+    setCadNome('');
+    setCadEmail('');
+    setCadSenha('');
+    setCadContato('');
+    setCadCep('');
+    setCadCidade('');
+    setCadBairro('');
+    setCadEstado('SP');
+    setCadTipo('carro');
+    setCadMarca('');
+    setCadModelo('');
+    setCadAno('');
+    setCadPlaca('');
+    setCadCor('');
+  };
+
+  // Garante que, ao abrir a tela de cadastro, os campos iniciem vazios sem resíduos de outra conta
+  useEffect(() => {
+    if (telaAtiva === 'cadastro' || telaInicial === 'cadastro') {
+      limparCamposCadastro();
+    }
+  }, [telaAtiva, telaInicial]);
+
   // ➡️ LÓGICA DE MEMÓRIA PERSISTENTE DO INQUILINO (RESOLUÇÃO DA UNIDADE)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -410,12 +457,7 @@ export default function AppClientePWA({
     setCarregandoUnidade(false);
   }, [bancoUnidades, unidadeNome]);
 
-  // Transição garantida para Home quando o usuário estiver autenticado
-  useEffect(() => {
-    if (usuarioLogado && (telaAtiva === 'cadastro' || telaAtiva === 'login')) {
-      setTelaAtiva('home');
-    }
-  }, [usuarioLogado]);
+
 
   // ID Padronizado da Unidade
   const unidadeIdNormalizada = (unidadeAtual?.id || unidadeNome || 'pitstop')
@@ -747,10 +789,10 @@ export default function AppClientePWA({
     );
 
     if (clienteExistente) {
-      localStorage.setItem('hubwash_cliente_sessao', JSON.stringify(clienteExistente));
-      setUsuarioLogado(clienteExistente);
-      setTelaAtiva('home');
-      mostrarToast(`Bem-vindo(a) de volta, ${clienteExistente.nome}!`, 'sucesso');
+      mostrarToast('Este e-mail já possui cadastro nesta unidade. Por favor, acesse com sua senha de login.', 'info');
+      setLoginEmail(cadEmail.trim());
+      setLoginSenha('');
+      setTelaAtiva('login');
       return;
     }
 
@@ -1338,12 +1380,17 @@ export default function AppClientePWA({
                 <p className="text-[11px] text-slate-400">Sua conta ficará salva e vinculada ao {unidadeAtual.nomeFantasia}.</p>
               </div>
 
-              <form onSubmit={handleCadastro} className="space-y-3 text-xs font-semibold">
+              <form onSubmit={handleCadastro} autoComplete="off" className="space-y-3 text-xs font-semibold">
+                {/* Prevenção contra preenchimento automático indevido de senhas de outros usuários */}
+                <input type="text" name="hubwash_fake_user" tabIndex={-1} style={{ display: 'none' }} autoComplete="off" />
+                <input type="password" name="hubwash_fake_pass" tabIndex={-1} style={{ display: 'none' }} autoComplete="new-password" />
+
                 <div className="space-y-1">
                   <label className="text-slate-400">Nome Completo *</label>
                   <input
                     type="text"
                     required
+                    autoComplete="off"
                     value={cadNome}
                     onChange={e => setCadNome(e.target.value)}
                     placeholder="Ex: Carlos Eduardo"
@@ -1355,8 +1402,14 @@ export default function AppClientePWA({
                   <div className="space-y-1">
                     <label className="text-slate-400">E-mail *</label>
                     <input
+                      id="cadastro-cliente-email"
+                      name="hubwash_novo_email"
                       type="email"
                       required
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
                       value={cadEmail}
                       onChange={e => setCadEmail(e.target.value)}
                       placeholder="seu@email.com"
@@ -1366,8 +1419,11 @@ export default function AppClientePWA({
                   <div className="space-y-1">
                     <label className="text-slate-400">Senha de Acesso *</label>
                     <input
+                      id="cadastro-cliente-senha"
+                      name="hubwash_novo_senha"
                       type="password"
                       required
+                      autoComplete="new-password"
                       value={cadSenha}
                       onChange={e => setCadSenha(e.target.value)}
                       placeholder="••••••••"
@@ -1381,6 +1437,7 @@ export default function AppClientePWA({
                     <label className="text-slate-400">Contato / WhatsApp</label>
                     <input
                       type="text"
+                      autoComplete="off"
                       value={cadContato}
                       onChange={e => setCadContato(e.target.value)}
                       placeholder="(11) 98888-7777"
@@ -1391,6 +1448,7 @@ export default function AppClientePWA({
                     <label className="text-slate-400">CEP</label>
                     <input
                       type="text"
+                      autoComplete="off"
                       value={cadCep}
                       onChange={e => setCadCep(e.target.value)}
                       placeholder="01001-000"
@@ -1404,6 +1462,7 @@ export default function AppClientePWA({
                     <label className="text-slate-400">Cidade</label>
                     <input
                       type="text"
+                      autoComplete="off"
                       value={cadCidade}
                       onChange={e => setCadCidade(e.target.value)}
                       placeholder="São Paulo"
@@ -1414,6 +1473,7 @@ export default function AppClientePWA({
                     <label className="text-slate-400">Estado (UF)</label>
                     <input
                       type="text"
+                      autoComplete="off"
                       value={cadEstado}
                       onChange={e => setCadEstado(e.target.value)}
                       placeholder="SP"
@@ -1454,6 +1514,7 @@ export default function AppClientePWA({
                       <label className="text-slate-400">Marca</label>
                       <input
                         type="text"
+                        autoComplete="off"
                         value={cadMarca}
                         onChange={e => setCadMarca(e.target.value)}
                         placeholder="Ex: Honda, Toyota"
@@ -1465,6 +1526,7 @@ export default function AppClientePWA({
                       <input
                         type="text"
                         required
+                        autoComplete="off"
                         value={cadModelo}
                         onChange={e => setCadModelo(e.target.value)}
                         placeholder="Ex: Civic, Corolla"
@@ -1479,6 +1541,7 @@ export default function AppClientePWA({
                       <input
                         type="text"
                         required
+                        autoComplete="off"
                         value={cadPlaca}
                         onChange={e => setCadPlaca(e.target.value.toUpperCase())}
                         placeholder="BRA2E19"
@@ -1489,6 +1552,7 @@ export default function AppClientePWA({
                       <label className="text-slate-400">Cor</label>
                       <input
                         type="text"
+                        autoComplete="off"
                         value={cadCor}
                         onChange={e => setCadCor(e.target.value)}
                         placeholder="Preto"
@@ -1499,6 +1563,7 @@ export default function AppClientePWA({
                       <label className="text-slate-400">Ano</label>
                       <input
                         type="text"
+                        autoComplete="off"
                         value={cadAno}
                         onChange={e => setCadAno(e.target.value)}
                         placeholder="2023"

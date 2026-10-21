@@ -30,16 +30,46 @@ export const URL_BASE_APP = typeof window !== 'undefined' && window.location.ori
 
 export const URL_BASE_NETLIFY = URL_BASE_APP;
 
-// Função segura para ler parâmetros de busca na URL
-
+// Função segura para ler parâmetros de busca na URL (query string, hash e pathname)
 function getParamSafe(name: string): string | null {
   try {
-    if (typeof window === 'undefined' || !window.location || !window.location.search) {
+    if (typeof window === 'undefined' || !window.location) {
       return null;
     }
-    const params = new URLSearchParams(window.location.search);
-    const val = params.get(name);
-    return val ? val.trim().toLowerCase() : null;
+    // 1. Tenta nos parâmetros normais de busca (?unidade=...&rota=...)
+    if (window.location.search) {
+      const params = new URLSearchParams(window.location.search);
+      const val = params.get(name);
+      if (val) return val.trim().toLowerCase();
+    }
+    // 2. Tenta nos parâmetros após hash (#/?unidade=... ou #/rota=...)
+    if (window.location.hash) {
+      const hashStr = window.location.hash.replace(/^#\/?/, '');
+      if (hashStr.includes('?')) {
+        const hashParams = new URLSearchParams(hashStr.slice(hashStr.indexOf('?')));
+        const val = hashParams.get(name);
+        if (val) return val.trim().toLowerCase();
+      }
+      if (hashStr.includes('=')) {
+        const hashParams = new URLSearchParams(hashStr);
+        const val = hashParams.get(name);
+        if (val) return val.trim().toLowerCase();
+      }
+      if (name === 'rota') {
+        const hLow = hashStr.toLowerCase();
+        if (hLow.includes('cadastro')) return 'cadastro';
+        if (hLow.includes('login')) return 'login';
+      }
+    }
+    // 3. Tenta no pathname (/cadastro ou /login)
+    if (window.location.pathname) {
+      const path = window.location.pathname.toLowerCase();
+      if (name === 'rota') {
+        if (path.includes('cadastro')) return 'cadastro';
+        if (path.includes('login')) return 'login';
+      }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -82,19 +112,67 @@ function resolverNomeUnidade(slugParam: string | null): string {
     : `${nomeFormatado} Lava Jato`;
 }
 
-export default function App() {
-  const unidadeSlug = getParamSafe('unidade');
-  const rotaSlug = getParamSafe('rota');
-  const modoSlug = getParamSafe('modo');
-  const painelParam = getParamSafe('painel');
+// Função robusta e síncrona para extrair a intenção de rota diretamente da URL (search, hash e pathname)
+function extrairRotasUrl() {
+  if (typeof window === 'undefined') {
+    return { isRotaCadastro: false, isRotaLogin: false, isRotaPainelDireto: false, unidadeSlug: null, rotaSlug: null };
+  }
 
-  // Verifica se é uma rota direta para o painel do dono do lava jato
-  const isRotaPainelDireto = Boolean(
-    modoSlug === 'painel' || 
-    painelParam === '1' || 
-    painelParam === 'true' || 
-    (unidadeSlug && (modoSlug === 'painel' || painelParam))
+  const search = window.location.search || '';
+  const hash = window.location.hash || '';
+  const pathname = window.location.pathname || '';
+  const searchParams = new URLSearchParams(search);
+
+  const rotaParam = (searchParams.get('rota') || getParamSafe('rota') || '').trim().toLowerCase();
+  const unidadeParam = (searchParams.get('unidade') || getParamSafe('unidade') || '').trim().toLowerCase();
+  const modoParam = (searchParams.get('modo') || getParamSafe('modo') || '').trim().toLowerCase();
+  const painelParam = (searchParams.get('painel') || getParamSafe('painel') || '').trim().toLowerCase();
+
+  const fullUrl = (search + ' ' + hash + ' ' + pathname).toLowerCase();
+
+  // Verifica se solicitou painel de gerenciamento
+  const isPainel = (
+    modoParam === 'painel' ||
+    painelParam === '1' ||
+    painelParam === 'true' ||
+    fullUrl.includes('modo=painel') ||
+    fullUrl.includes('painel=true')
   );
+
+  // 1. Rota de login explícita
+  const isLogin = !isPainel && (
+    rotaParam === 'login' ||
+    fullUrl.includes('rota=login') ||
+    fullUrl.includes('#/login') ||
+    pathname.endsWith('/login')
+  );
+
+  // 2. Rota de cadastro explícita ou por acesso de QR Code/link da unidade (?unidade=...)
+  const isCadastro = !isPainel && !isLogin && (
+    rotaParam === 'cadastro' ||
+    fullUrl.includes('rota=cadastro') ||
+    fullUrl.includes('#/cadastro') ||
+    pathname.endsWith('/cadastro') ||
+    Boolean(unidadeParam) ||
+    fullUrl.includes('unidade=')
+  );
+
+  return {
+    isRotaCadastro: isCadastro,
+    isRotaLogin: isLogin,
+    isRotaPainelDireto: isPainel,
+    unidadeSlug: unidadeParam || null,
+    rotaSlug: rotaParam || null
+  };
+}
+
+export default function App() {
+  const rotasUrl = extrairRotasUrl();
+  const isRotaCadastro = rotasUrl.isRotaCadastro;
+  const isRotaLogin = rotasUrl.isRotaLogin;
+  const isRotaPainelDireto = rotasUrl.isRotaPainelDireto;
+  const unidadeSlug = rotasUrl.unidadeSlug;
+  const rotaSlug = rotasUrl.rotaSlug;
 
   // Lê sessão salva do operador (Dono do Lava Jato ou Admin Master)
   const sessaoOperadorSalva = (() => {
@@ -112,31 +190,25 @@ export default function App() {
     return null;
   })();
 
-  // Inicialização inteligente e ultrarrápida:
-  // 1. Se tem unidade na URL SEM modo painel -> Abre App do Cliente (0ms)
-  // 2. Se tem rota direta para o painel -> Abre Painel Lava Jato (0ms)
-  // 3. Se tem sessão de operador salva -> Abre Painel Lava Jato ou Master direto (0ms)
-  // 4. Caso contrário -> Terminal Login OTP
+  // 1. Verificação explícita do estado inicial do telaClienteInicial
+  const [telaClienteInicial, setTelaClienteInicial] = useState<'login' | 'cadastro' | 'home'>(() => {
+    if (isRotaLogin) return 'login';
+    if (isRotaCadastro || unidadeSlug || rotaSlug === 'cadastro') return 'cadastro';
+    return 'cadastro';
+  });
+
+  // 2. Controle de autenticação e tela atual para arranque instantâneo (0ms)
   const [autenticado, setAutenticado] = useState<boolean>(() => {
+    if (isRotaCadastro || isRotaLogin || unidadeSlug) return true;
     if (isRotaPainelDireto) return true;
-    if (unidadeSlug) return true;
     return Boolean(sessaoOperadorSalva);
   });
   
   const [telaAtual, setTelaAtual] = useState<'lavajato' | 'master' | 'cliente'>(() => {
+    if (isRotaCadastro || isRotaLogin || unidadeSlug) return 'cliente';
     if (isRotaPainelDireto) return 'lavajato';
-    if (unidadeSlug) return 'cliente';
     if (sessaoOperadorSalva) return sessaoOperadorSalva.role;
     return 'lavajato';
-  });
-
-  const [telaClienteInicial, setTelaClienteInicial] = useState<'login' | 'cadastro' | 'home'>(() => {
-    if (rotaSlug === 'login') return 'login';
-    // Correção: quando acessa via link ou QR code da unidade, SEMPRE abre na tela de cadastro!
-    if (unidadeSlug || rotaSlug === 'cadastro') return 'cadastro';
-    const sessaoSalva = typeof window !== 'undefined' ? localStorage.getItem('hubwash_cliente_sessao') : null;
-    if (sessaoSalva) return 'home';
-    return 'cadastro';
   });
 
   const [unidadeSelecionada, setUnidadeSelecionada] = useState<string>(() => {
@@ -148,7 +220,7 @@ export default function App() {
   const [erroApp, setErroApp] = useState<string | null>(null);
   const [mostrarSplash, setMostrarSplash] = useState<boolean>(() => {
     // Acesso direto, via QR Code ou operador salvo abre imediatamente (0ms) sem splash
-    if (unidadeSlug || isRotaPainelDireto || sessaoOperadorSalva || rotaSlug) {
+    if (isRotaCadastro || isRotaLogin || unidadeSlug || isRotaPainelDireto || sessaoOperadorSalva || rotaSlug) {
       return false;
     }
     try {
@@ -158,34 +230,44 @@ export default function App() {
     }
   });
 
-  // Efeito de inicialização e validação das rotas multi-inquilino
+  // Efeito de sincronização de rota para suportar links dinâmicos e navegação
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const uParam = params.get('unidade');
-    const rParam = params.get('rota');
-    const mParam = params.get('modo');
-    const pParam = params.get('painel');
+    const rotas = extrairRotasUrl();
 
-    if (mParam === 'painel' || pParam === '1' || pParam === 'true') {
+    if (rotas.isRotaPainelDireto) {
       setAutenticado(true);
       setTelaAtual('lavajato');
-      if (uParam) {
-        setUnidadeSelecionada(resolverNomeUnidade(uParam.trim().toLowerCase()));
+      if (rotas.unidadeSlug) {
+        setUnidadeSelecionada(resolverNomeUnidade(rotas.unidadeSlug));
       }
       return;
     }
 
-    if (uParam) {
+    if (rotas.isRotaCadastro) {
       setAutenticado(true);
       setTelaAtual('cliente');
-      setUnidadeSelecionada(resolverNomeUnidade(uParam.trim().toLowerCase()));
-
-      if (rParam?.toLowerCase() === 'login') {
-        setTelaClienteInicial('login');
-      } else {
-        // Correção de rota: ao acessar link ou escanear QR Code, SEMPRE abre a tela de CADASTRO
-        setTelaClienteInicial('cadastro');
+      setTelaClienteInicial('cadastro');
+      if (rotas.unidadeSlug) {
+        setUnidadeSelecionada(resolverNomeUnidade(rotas.unidadeSlug));
       }
+      return;
+    }
+
+    if (rotas.isRotaLogin) {
+      setAutenticado(true);
+      setTelaAtual('cliente');
+      setTelaClienteInicial('login');
+      if (rotas.unidadeSlug) {
+        setUnidadeSelecionada(resolverNomeUnidade(rotas.unidadeSlug));
+      }
+      return;
+    }
+
+    if (rotas.unidadeSlug) {
+      setAutenticado(true);
+      setTelaAtual('cliente');
+      setTelaClienteInicial('cadastro');
+      setUnidadeSelecionada(resolverNomeUnidade(rotas.unidadeSlug));
     }
   }, []);
 
@@ -266,11 +348,15 @@ export default function App() {
 
   // TELA: APLICATIVO DO CLIENTE (PWA)
   if (telaAtual === 'cliente') {
+    // Verificação explícita do estado inicial do telaClienteInicial
+    const viewClienteAtiva: 'login' | 'cadastro' = telaClienteInicial === 'login' ? 'login' : 'cadastro';
+
     return (
       <Suspense fallback={fallbackLoading}>
         <AppClientePWA
+          key={`cliente-${unidadeSelecionada}-${viewClienteAtiva}`}
           unidadeNome={unidadeSelecionada}
-          telaInicial={telaClienteInicial}
+          telaInicial={viewClienteAtiva}
           onVoltarLogin={() => {
             setAutenticado(false);
           }}

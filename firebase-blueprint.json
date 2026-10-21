@@ -94,6 +94,24 @@
         "unidadeId": { "type": "string" }
       },
       "required": ["nome", "valor", "ativo"]
+    },
+    "Checklist": {
+      "title": "Checklist",
+      "description": "Vistorias de entrada de veículos com status dos componentes e até 10 fotos",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "veiculo": { "type": "string" },
+        "placa": { "type": "string" },
+        "cliente": { "type": "string" },
+        "avarias": { "type": "string" },
+        "fotos": { "type": "number" },
+        "nivelCombustivel": { "type": "string" },
+        "pertences": { "type": "string" },
+        "data": { "type": "string" },
+        "unidadeId": { "type": "string" }
+      },
+      "required": ["veiculo", "placa", "data"]
     }
   },
   "firestore": {
@@ -116,6 +134,10 @@
     "/servicos/{servicoId}": {
       "schema": { "$ref": "#/entities/Servico" },
       "description": "Coleção de serviços e preços do lava-jato"
+    },
+    "/checklists/{checklistId}": {
+      "schema": { "$ref": "#/entities/Checklist" },
+      "description": "Coleção de vistorias e checklists com fotos"
     }
   }
 }

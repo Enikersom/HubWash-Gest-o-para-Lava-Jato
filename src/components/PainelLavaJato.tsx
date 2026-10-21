@@ -81,6 +81,8 @@ import {
   AgendamentoPWA,
   ServicoLavaJato
 } from '../types';
+import RelatorioFinanceiro from './RelatorioFinanceiro';
+import SistemaChecklist from './SistemaChecklist';
 
 interface PainelLavaJatoProps {
   unidadeNome?: string;
@@ -94,7 +96,7 @@ export default function PainelLavaJato({
   // CONFIGURAÇÃO DO MENU LATERAL RECOLHÍVEL
   const [sidebarAberta, setSidebarAberta] = useState(true);
   const [abaAtiva, setAbaAtiva] = useState<
-    'fila' | 'agendamentos' | 'servicos' | 'checklist' | 'clientes' | 'funcionarios' | 'produtos' | 'caixa' | 'banner' | 'configuracao'
+    'fila' | 'agendamentos' | 'servicos' | 'checklist' | 'relatorio' | 'clientes' | 'funcionarios' | 'produtos' | 'caixa' | 'banner' | 'configuracao'
   >('fila');
 
   // CONTROLADORES DE CORES PARA PERSONALIZAÇÃO DO APP
@@ -1901,11 +1903,12 @@ export default function PainelLavaJato({
               { id: 'fila', label: 'Fila de Lavagem', icon: Layers },
               { id: 'agendamentos', label: 'Agendamentos PWA', icon: Calendar },
               { id: 'servicos', label: 'Serviços & Valores', icon: Tag },
-              { id: 'checklist', label: 'Checklist de Entrada', icon: CheckSquare },
+              { id: 'checklist', label: 'Checklist & Fotos', icon: CheckSquare },
+              { id: 'relatorio', label: 'Relatório Financeiro', icon: TrendingUp },
+              { id: 'caixa', label: 'Caixa Diário', icon: DollarSign },
               { id: 'clientes', label: 'Clientes & Fidelidade', icon: Users },
               { id: 'funcionarios', label: 'Funcionários / Comissão', icon: Wrench },
               { id: 'produtos', label: 'Estoque / Produtos', icon: Package },
-              { id: 'caixa', label: 'Caixa Diário', icon: DollarSign },
               { id: 'banner', label: 'Banners Promocionais', icon: ImageIcon },
               { id: 'configuracao', label: 'Configurações App', icon: Settings },
             ].map((item) => {
@@ -1950,7 +1953,8 @@ export default function PainelLavaJato({
               {abaAtiva === 'fila' && 'Fila de Lavagens em Tempo Real'}
               {abaAtiva === 'agendamentos' && 'Agendamentos Online (PWA Clientes)'}
               {abaAtiva === 'servicos' && 'Serviços & Tabela de Preços do Lava Jato'}
-              {abaAtiva === 'checklist' && 'Checklist de Entrada & Vistoria'}
+              {abaAtiva === 'checklist' && 'Checklist de Entrada & Vistoria Veicular'}
+              {abaAtiva === 'relatorio' && 'Relatório Financeiro & Atendimentos Diários'}
               {abaAtiva === 'clientes' && 'Clientes & Programa de Fidelidade'}
               {abaAtiva === 'funcionarios' && 'Funcionários & Comissões Automáticas'}
               {abaAtiva === 'produtos' && 'Controle de Estoque & Insumos'}
@@ -2691,130 +2695,45 @@ export default function PainelLavaJato({
           )}
 
           {/* ========================================== */}
-          {/* ABA 3: CHECKLIST DE ENTRADA & VISTORIA */}
+          {/* ABA: CHECKLIST DE ENTRADA & VISTORIA VEICULAR COM FOTOS */}
           {/* ========================================== */}
           {abaAtiva === 'checklist' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Formulário Novo Checklist */}
-              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
-                  <CheckSquare className="w-4 h-4 text-cyan-400" /> Nova Vistoria de Entrada
-                </h3>
+            <SistemaChecklist
+              checklists={checklists}
+              onSalvarChecklist={(novaVistoria) => {
+                setChecklists(prev => [novaVistoria, ...prev]);
+                if (db) {
+                  try {
+                    addDoc(collection(db, 'checklists'), {
+                      ...novaVistoria,
+                      unidadeId: unidadeSlugSanitizada,
+                      unidadeNome,
+                      createdAt: new Date().toISOString()
+                    }).catch(err => console.warn('Sync checklist Firestore:', err));
+                  } catch (e) {
+                    console.warn('Erro ao salvar checklist:', e);
+                  }
+                }
+                mostrarToast('Vistoria e Fotos arquivadas com sucesso!', 'sucesso');
+              }}
+              onExcluirChecklist={(id, nome) => {
+                setItemParaExcluir({ tipo: 'checklist', id, nome });
+              }}
+              unidadeNome={unidadeNome}
+              temaClasses={temaClasses}
+            />
+          )}
 
-                <form onSubmit={handleSalvarChecklist} className="space-y-3 text-xs">
-                  <div>
-                    <label className="block text-slate-400 font-medium mb-1">Veículo / Placa *</label>
-                    <input
-                      type="text"
-                      value={novoCheckVeiculo}
-                      onChange={(e) => setNovoCheckVeiculo(e.target.value)}
-                      placeholder="Ex: Honda Civic (BRA2E19)"
-                      required
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-400 font-medium mb-1">Avarias Observadas</label>
-                    <textarea
-                      value={novoCheckAvaria}
-                      onChange={(e) => setNovoCheckAvaria(e.target.value)}
-                      placeholder="Ex: Risco porta motorista, pequeno amassado na tampa traseira..."
-                      rows={3}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none focus:border-blue-500 resize-none"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-slate-400 font-medium mb-1">Nível Tanque</label>
-                      <select
-                        value={novoCheckCombustivel}
-                        onChange={(e) => setNovoCheckCombustivel(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white focus:outline-none focus:border-blue-500 cursor-pointer"
-                      >
-                        <option value="Reserva">Reserva</option>
-                        <option value="1/4">1/4 Tanque</option>
-                        <option value="1/2">1/2 Tanque</option>
-                        <option value="3/4">3/4 Tanque</option>
-                        <option value="Cheio">Tanque Cheio</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-slate-400 font-medium mb-1">Pertences</label>
-                      <input
-                        type="text"
-                        value={novoCheckPertences}
-                        onChange={(e) => setNovoCheckPertences(e.target.value)}
-                        placeholder="Ex: Moletom no banco"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="p-3 bg-slate-950 border border-dashed border-slate-700 rounded-xl text-center space-y-1.5">
-                    <Camera className="w-5 h-5 text-slate-400 mx-auto" />
-                    <p className="text-[11px] text-slate-400">Fotos da Vistoria anexadas (3 fotos)</p>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className={`w-full py-2.5 px-4 ${temaClasses.bg} text-white font-bold rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-1.5`}
-                  >
-                    <CheckCircle2 size={15} />
-                    <span>Salvar Checklist & Vistoria</span>
-                  </button>
-                </form>
-              </div>
-
-              {/* Histórico de Checklists */}
-              <div className="lg:col-span-2 space-y-3">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" /> Histórico de Vistorias Registradas
-                </h3>
-
-                <div className="space-y-3">
-                  {checklists.map((chk) => (
-                    <div
-                      key={chk.id}
-                      className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4.5 space-y-3 shadow-lg"
-                    >
-                      <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
-                        <div>
-                          <h4 className="text-sm font-bold text-white">{chk.veiculo}</h4>
-                          <p className="text-[11px] text-slate-400">Vistoria realizada em: {chk.data}</p>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => setItemParaExcluir({ tipo: 'checklist', id: chk.id, nome: `Vistoria de ${chk.veiculo}` })}
-                          className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition cursor-pointer"
-                          title="Excluir Vistoria"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs bg-slate-950/70 p-3 rounded-xl">
-                        <div>
-                          <span className="text-[10px] text-slate-500 block">Avarias</span>
-                          <p className="text-amber-300 font-medium">{chk.avarias}</p>
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-500 block">Combustível</span>
-                          <p className="text-slate-300">{chk.nivelCombustivel || '1/2 tanque'}</p>
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-500 block">Pertences</span>
-                          <p className="text-slate-300">{chk.pertences || 'Nenhum'}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+          {/* ========================================== */}
+          {/* ABA: RELATÓRIO FINANCEIRO & ATENDIMENTOS DIÁRIOS (RECHARTS) */}
+          {/* ========================================== */}
+          {abaAtiva === 'relatorio' && (
+            <RelatorioFinanceiro
+              movimentacoes={movimentacoesCaixa}
+              filaAtendimentos={veiculosFila}
+              agendamentos={agendamentos}
+              temaClasses={temaClasses}
+            />
           )}
 
           {/* ========================================== */}
@@ -3326,6 +3245,16 @@ export default function PainelLavaJato({
                     R$ {saldoCaixa.toFixed(2)}
                   </p>
                 </div>
+              </div>
+
+              {/* Relatório Financeiro e Gráficos de Atendimentos Diários com Recharts */}
+              <div className="pt-1">
+                <RelatorioFinanceiro
+                  movimentacoes={movimentacoesCaixa}
+                  filaAtendimentos={veiculosFila}
+                  agendamentos={agendamentos}
+                  temaClasses={temaClasses}
+                />
               </div>
 
               {/* Lançamento Rápido no Caixa */}

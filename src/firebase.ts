@@ -66,18 +66,18 @@ function carregarConfigFirebase() {
     console.warn('Erro ao ler hubwash_firebase_config:', e);
   }
 
-  // 3. Fallback modo demonstração
+  // 3. Configuração oficial do projeto hubwash-pro
   return {
     config: {
-      apiKey: "AIzaSyDemoDummyKeyForPreviewModeOnly12345",
-      authDomain: "hubwash-preview.firebaseapp.com",
-      projectId: "hubwash-preview",
-      storageBucket: "hubwash-preview.appspot.com",
-      messagingSenderId: "123456789",
-      appId: "1:123456789:web:demo",
-      databaseId: ""
+      apiKey: "AIzaSyDyAQAQ3m-fdTLMce9lIc40_2soI3Ro0yA",
+      authDomain: "hubwash-pro.firebaseapp.com",
+      projectId: "hubwash-pro",
+      storageBucket: "hubwash-pro.firebasestorage.app",
+      messagingSenderId: "282309703337",
+      appId: "1:282309703337:web:6682da99bc8871a4b55bb8",
+      databaseId: "(default)"
     },
-    fonte: 'demo' as const
+    fonte: 'applet' as const
   };
 }
 
@@ -100,11 +100,11 @@ export function getFirebaseStatus(): {
   modoReal: boolean;
   databaseId?: string;
 } {
-  const modoReal = configFonte !== 'demo' && Boolean(firebaseConfig.projectId && !firebaseConfig.projectId.includes('preview'));
+  const modoReal = Boolean(firebaseConfig.projectId && !firebaseConfig.projectId.includes('preview'));
   return {
     configurado: modoReal,
     projectId: firebaseConfig.projectId || '',
-    fonte: configFonte,
+    fonte: configFonte as 'applet' | 'env' | 'local' | 'demo',
     modoReal,
     databaseId: firebaseConfig.databaseId || '(default)'
   };

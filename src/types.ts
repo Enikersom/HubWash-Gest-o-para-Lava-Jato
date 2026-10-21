@@ -44,12 +44,29 @@ export interface MovimentacaoCaixa {
 
 export interface ItemChecklist {
   id: string;
+  unidadeId?: string;
   veiculo: string;
+  placa?: string;
+  cliente?: string;
   avarias: string;
   fotos: number;
-  data: string;
+  fotosUrls?: string[]; // Lista com até 10 fotos (base64 ou URLs)
+  itensVerificados?: {
+    lataria?: 'ok' | 'avaria' | 'nao_se_aplica';
+    vidros?: 'ok' | 'avaria' | 'nao_se_aplica';
+    pneus?: 'ok' | 'avaria' | 'nao_se_aplica';
+    estofamento?: 'ok' | 'avaria' | 'nao_se_aplica';
+    estepe?: 'ok' | 'avaria' | 'nao_se_aplica';
+    antena?: 'ok' | 'avaria' | 'nao_se_aplica';
+    tapetes?: 'ok' | 'avaria' | 'nao_se_aplica';
+    luzesFarois?: 'ok' | 'avaria' | 'nao_se_aplica';
+  };
   nivelCombustivel?: string;
   pertences?: string;
+  observacoes?: string;
+  responsavel?: string;
+  data: string;
+  hora?: string;
 }
 
 export interface ProdutoEstoque {

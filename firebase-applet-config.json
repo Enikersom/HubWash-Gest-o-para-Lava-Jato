@@ -1,12 +1,12 @@
 {
-  "projectId": "graphical-dreamlet-14dh4",
-  "appId": "1:565945201741:web:9539a505483f4781abd804",
-  "apiKey": "AIzaSyBJ7U9_CbAZfacSc2KRnnWiu-QT69Jj0Ic",
-  "authDomain": "graphical-dreamlet-14dh4.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-hubwashgestopara-78727170-fc32-4130-8d36-380282816e22",
-  "storageBucket": "graphical-dreamlet-14dh4.firebasestorage.app",
-  "messagingSenderId": "565945201741",
+  "projectId": "hubwash-pro",
+  "appId": "1:282309703337:web:6682da99bc8871a4b55bb8",
+  "apiKey": "AIzaSyDyAQAQ3m-fdTLMce9lIc40_2soI3Ro0yA",
+  "authDomain": "hubwash-pro.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "hubwash-pro.firebasestorage.app",
+  "messagingSenderId": "282309703337",
   "measurementId": "",
-  "oAuthClientId": "565945201741-f5cde2k1v8gfb10et9a7bp2trkibe8j9.apps.googleusercontent.com",
+  "oAuthClientId": "",
   "recaptchaSiteKey": ""
 }
