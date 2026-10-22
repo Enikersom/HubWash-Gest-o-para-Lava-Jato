@@ -65,6 +65,7 @@ export interface ItemChecklist {
   pertences?: string;
   observacoes?: string;
   responsavel?: string;
+  agendamentoId?: string;
   data: string;
   hora?: string;
 }
@@ -107,7 +108,10 @@ export interface AgendamentoPWA {
   servico: string;
   data: string;
   horario: string;
-  status: 'Pendente' | 'Confirmado' | 'Concluido' | 'Cancelado';
+  status: 'Pendente' | 'Confirmado' | 'Concluido' | 'Cancelado' | 'Em Atendimento' | 'Vistoriado';
+  unidadeId?: string;
+  unidadeVinculadaId?: string;
+  email?: string;
 }
 
 export interface ServicoLavaJato {

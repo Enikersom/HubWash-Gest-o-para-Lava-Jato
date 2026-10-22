@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   CheckSquare,
   Camera,
@@ -18,13 +18,17 @@ import {
   FileText,
   Printer,
   ChevronRight,
-  Maximize2
+  Maximize2,
+  BookmarkCheck,
+  Sparkles,
+  Phone,
+  Play
 } from 'lucide-react';
-import { ItemChecklist } from '../types';
+import { ItemChecklist, AgendamentoPWA } from '../types';
 
 interface SistemaChecklistProps {
   checklists: ItemChecklist[];
-  onSalvarChecklist: (checklist: ItemChecklist) => void;
+  onSalvarChecklist: (checklist: ItemChecklist, agendamentoIdOrigem?: string) => void;
   onExcluirChecklist: (id: string, nome: string) => void;
   unidadeNome: string;
   temaClasses: {
@@ -32,6 +36,9 @@ interface SistemaChecklistProps {
     border: string;
     text: string;
   };
+  agendamentosPendentes?: AgendamentoPWA[];
+  agendamentoPreSelecionado?: AgendamentoPWA | null;
+  onLimparAgendamentoPreSelecionado?: () => void;
 }
 
 // Itens padrão de inspeção física do veículo
@@ -51,8 +58,14 @@ export default function SistemaChecklist({
   onSalvarChecklist,
   onExcluirChecklist,
   unidadeNome,
-  temaClasses
+  temaClasses,
+  agendamentosPendentes = [],
+  agendamentoPreSelecionado,
+  onLimparAgendamentoPreSelecionado
 }: SistemaChecklistProps) {
+  // Agendamento vinculado à vistoria atual
+  const [agendamentoVinculado, setAgendamentoVinculado] = useState<AgendamentoPWA | null>(agendamentoPreSelecionado || null);
+
   // Estados do formulário de novo checklist
   const [veiculo, setVeiculo] = useState('');
   const [placa, setPlaca] = useState('');
@@ -141,6 +154,34 @@ export default function SistemaChecklist({
     setErroFoto(null);
   };
 
+  const extrairPlaca = (str: string) => {
+    const m = str.match(/\((?:Placa:\s*)?([A-Z0-9-]{7,8})\)/i) || str.match(/([A-Z]{3}[0-9][A-Z0-9][0-9]{2})/i);
+    return m ? m[1].toUpperCase() : '';
+  };
+
+  const extrairModelo = (str: string) => {
+    return str.replace(/\s*\([^)]*\)/g, '').trim();
+  };
+
+  const selecionarAgendamentoParaVistoria = (ag: AgendamentoPWA) => {
+    setAgendamentoVinculado(ag);
+    setVeiculo(extrairModelo(ag.veiculo) || ag.veiculo);
+    setPlaca(extrairPlaca(ag.veiculo) || '');
+    setCliente(ag.cliente || '');
+    setObservacoes(`Agendamento: ${ag.data} às ${ag.horario} • Serviço: ${ag.servico} • Tel: ${ag.telefone}`);
+    setErroFoto(null);
+  };
+
+  // Sincroniza quando a prop agendamentoPreSelecionado mudar ou se houver agendamento pendente
+  useEffect(() => {
+    if (agendamentoPreSelecionado) {
+      selecionarAgendamentoParaVistoria(agendamentoPreSelecionado);
+    } else if (!agendamentoVinculado && agendamentosPendentes.length > 0) {
+      // Pré-seleciona automaticamente o primeiro cliente que chegou ou agendou
+      selecionarAgendamentoParaVistoria(agendamentosPendentes[0]);
+    }
+  }, [agendamentoPreSelecionado, agendamentosPendentes.length]);
+
   const handleSubmeterVistoria = (e: React.FormEvent) => {
     e.preventDefault();
     if (!veiculo.trim() || !placa.trim()) {
@@ -161,13 +202,14 @@ export default function SistemaChecklist({
       pertences: pertences.trim() || 'Nenhum pertence deixado no veículo',
       observacoes: observacoes.trim(),
       responsavel: responsavel.trim() || 'Operador',
+      agendamentoId: agendamentoVinculado?.id,
       data: new Date().toLocaleDateString('pt-BR'),
       hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
     };
 
-    onSalvarChecklist(novaVistoria);
+    onSalvarChecklist(novaVistoria, agendamentoVinculado?.id);
 
-    // Limpa o formulário para o próximo veículo
+    // Limpa o formulário e a reserva
     setVeiculo('');
     setPlaca('');
     setCliente('');
@@ -176,6 +218,8 @@ export default function SistemaChecklist({
     setObservacoes('');
     setFotosUrls([]);
     setErroFoto(null);
+    setAgendamentoVinculado(null);
+    onLimparAgendamentoPreSelecionado?.();
     setItensStatus({
       lataria: 'ok',
       vidros: 'ok',
@@ -209,6 +253,76 @@ export default function SistemaChecklist({
         </div>
       </div>
 
+      {/* SEÇÃO: VEÍCULOS AGENDADOS / CHEGANDO NO LAVA JATO */}
+      {agendamentosPendentes.length > 0 && (
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4.5 space-y-3 shadow-xl">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-cyan-400" />
+              <span>Veículos Agendados / Aguardando Vistoria de Chegada</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                {agendamentosPendentes.length} {agendamentosPendentes.length === 1 ? 'veículo' : 'veículos'}
+              </span>
+            </h3>
+            <span className="text-[11px] text-slate-400 hidden sm:inline">
+              Clique em um veículo para reservar e tirar as fotos de entrada
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {agendamentosPendentes.map((ag) => {
+              const isReservado = agendamentoVinculado?.id === ag.id;
+              return (
+                <div
+                  key={ag.id}
+                  className={`border rounded-xl p-3.5 space-y-2 transition flex flex-col justify-between ${
+                    isReservado
+                      ? 'bg-cyan-950/40 border-cyan-500 shadow-lg shadow-cyan-950/40 ring-1 ring-cyan-500'
+                      : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-start justify-between gap-1.5">
+                      <h4 className="text-xs font-bold text-white">{ag.cliente}</h4>
+                      {isReservado ? (
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-cyan-500 text-slate-950">
+                          Reservado
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                          {ag.status}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-cyan-300 font-semibold">{ag.veiculo}</p>
+                    <p className="text-[10px] text-slate-400 flex items-center gap-1">
+                      <Clock size={11} className="text-slate-500" />
+                      <span>{ag.data} às {ag.horario} • {ag.servico}</span>
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      selecionarAgendamentoParaVistoria(ag);
+                      cameraInputRef.current?.click();
+                    }}
+                    className={`w-full py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                      isReservado
+                        ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-md'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                    }`}
+                  >
+                    <Camera size={13} />
+                    <span>{isReservado ? '📸 Bater Fotos do Veículo' : 'Reservar & Vistoriar'}</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* ======================================================== */}
         {/* FORMULÁRIO DE NOVA VISTORIA (COL 12 -> 5 no desktop) */}
@@ -218,6 +332,55 @@ export default function SistemaChecklist({
             <Plus className="w-4 h-4 text-cyan-400" />
             <span>Nova Inspeção de Entrada</span>
           </h3>
+
+          {/* BANNER DE VEÍCULO RESERVADO PARA VISTORIA */}
+          {agendamentoVinculado && (
+            <div className="p-3.5 bg-gradient-to-r from-cyan-950/70 to-blue-950/70 border border-cyan-500/40 rounded-xl space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-cyan-300 flex items-center gap-1.5 uppercase tracking-wider">
+                  <BookmarkCheck size={14} className="text-cyan-400" /> Veículo Reservado para Vistoria
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAgendamentoVinculado(null);
+                    onLimparAgendamentoPreSelecionado?.();
+                  }}
+                  className="text-[10px] text-slate-400 hover:text-slate-200 underline cursor-pointer"
+                >
+                  Limpar Reserva
+                </button>
+              </div>
+
+              <div>
+                <p className="text-xs text-white font-bold">{agendamentoVinculado.cliente} • {agendamentoVinculado.veiculo}</p>
+                <p className="text-[11px] text-cyan-200">
+                  Agendado: {agendamentoVinculado.data} às {agendamentoVinculado.horario} • {agendamentoVinculado.servico}
+                </p>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={fotosUrls.length >= 10}
+                  onClick={() => cameraInputRef.current?.click()}
+                  className="flex-1 py-2 px-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-cyan-950/40"
+                >
+                  <Camera size={14} />
+                  <span>Tirar Foto Agora ({fotosUrls.length}/10)</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={fotosUrls.length >= 10}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer border border-slate-700"
+                  title="Upload da Galeria"
+                >
+                  <Upload size={14} />
+                </button>
+              </div>
+            </div>
+          )}
 
           <form onSubmit={handleSubmeterVistoria} className="space-y-4 text-xs font-semibold">
             {/* DADOS BÁSICOS */}

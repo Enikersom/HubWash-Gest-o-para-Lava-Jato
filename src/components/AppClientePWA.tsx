@@ -31,7 +31,7 @@ import {
   Flame,
   Tag
 } from 'lucide-react';
-import { db, collection, addDoc, onSnapshot, doc, deleteDoc, query, where, orderBy } from '../firebase';
+import { db, collection, addDoc, setDoc, onSnapshot, doc, deleteDoc, query, where, orderBy, getDocs } from '../firebase';
 import { 
   buscarDadosSincronizados, 
   registrarClienteServidor, 
@@ -677,14 +677,38 @@ export default function AppClientePWA({
               }
             });
 
-            if (listaFirestore.length > 0) {
-              setTodosAgendamentos((prev) => {
-                const mapa = new Map<string, Agendamento>();
-                prev.forEach((item) => mapa.set(item.id, item));
-                listaFirestore.forEach((item) => mapa.set(item.id, item));
-                return Array.from(mapa.values());
+            setTodosAgendamentos((prev) => {
+              const mapa = new Map<string, Agendamento>();
+              const chavesVistas = new Set<string>();
+
+              const gerarChaveUnica = (a: Agendamento) => {
+                const u = (a.unidadeId || '').toLowerCase().trim();
+                const cli = (a.email || a.telefone || a.cliente || '').toLowerCase().trim();
+                const d = (a.data || '').trim();
+                const h = (a.horario || '').trim();
+                return `${u}|${cli}|${d}|${h}`;
+              };
+
+              // 1. Prioridade máxima para dados oficiais do Firestore
+              listaFirestore.forEach((item) => {
+                const chave = gerarChaveUnica(item);
+                if (!chavesVistas.has(chave)) {
+                  chavesVistas.add(chave);
+                  mapa.set(item.id, item);
+                }
               });
-            }
+
+              // 2. Mantém itens locais apenas se não forem redundantes
+              prev.forEach((item) => {
+                const chave = gerarChaveUnica(item);
+                if (!mapa.has(item.id) && !chavesVistas.has(chave)) {
+                  chavesVistas.add(chave);
+                  mapa.set(item.id, item);
+                }
+              });
+
+              return Array.from(mapa.values());
+            });
           },
           (error: any) => {
             console.warn('Firestore onSnapshot agendamentos (AppCliente):', error);
@@ -1032,9 +1056,9 @@ export default function AppClientePWA({
         ? `${usuarioLogado.modelo}${usuarioLogado.placa ? ` (Placa: ${usuarioLogado.placa})` : ''}`
         : (usuarioLogado.placa ? `Placa: ${usuarioLogado.placa}` : 'Veículo Cadastrado');
 
-      const tempId = String(Date.now());
+      const agendamentoId = `ag_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const novoAgendamento: Agendamento = {
-        id: tempId,
+        id: agendamentoId,
         unidadeId: unidadeIdNormalizada,
         cliente: usuarioLogado.nome || 'Cliente',
         telefone: usuarioLogado.contato || '(11) 99999-0000',
@@ -1046,7 +1070,17 @@ export default function AppClientePWA({
         status: 'Pendente'
       };
 
-      setTodosAgendamentos(prev => [novoAgendamento, ...prev]);
+      // Atualiza o estado local evitando qualquer duplicação por chave
+      setTodosAgendamentos(prev => {
+        const idCliNovo = (novoAgendamento.email || novoAgendamento.telefone || novoAgendamento.cliente || '').toLowerCase().trim();
+        const chaveNova = `${novoAgendamento.unidadeId}|${idCliNovo}|${novoAgendamento.data}|${novoAgendamento.horario}`;
+        const semDuplicados = prev.filter(a => {
+          const idCliA = (a.email || a.telefone || a.cliente || '').toLowerCase().trim();
+          const k = `${a.unidadeId}|${idCliA}|${a.data}|${a.horario}`;
+          return a.id !== agendamentoId && k !== chaveNova;
+        });
+        return [novoAgendamento, ...semDuplicados];
+      });
 
       // 🛑 Limpa os estados de data e hora imediatamente e volta para Home para evitar cliques duplicados
       const dataAgendada = agendaData;
@@ -1058,7 +1092,7 @@ export default function AppClientePWA({
       
       // 1. Envia diretamente ao Servidor Central (sincronização imediata com o notebook no escritório)
       await salvarAgendamentoServidor({
-        id: tempId,
+        id: agendamentoId,
         unidadeId: unidadeIdNormalizada,
         cliente: novoAgendamento.cliente || 'Cliente',
         telefone: novoAgendamento.telefone || '(11) 99999-0000',
@@ -1073,7 +1107,7 @@ export default function AppClientePWA({
       // 2. Salva no localStorage compartilhado e dispara evento em tempo real para o Painel
       try {
         const itemPainel = {
-          id: tempId,
+          id: agendamentoId,
           cliente: usuarioLogado.nome || 'Cliente',
           telefone: usuarioLogado.contato || '(11) 99999-0000',
           veiculo: veiculoCompleto,
@@ -1088,15 +1122,16 @@ export default function AppClientePWA({
         };
         const salvosPainel = localStorage.getItem('hubwash_agendamentos_painel');
         const listaPainel = salvosPainel ? JSON.parse(salvosPainel) : [];
-        const listaFinal = [itemPainel, ...listaPainel.filter((a: any) => a.id !== tempId)];
+        const listaFinal = [itemPainel, ...listaPainel.filter((a: any) => a.id !== agendamentoId)];
         localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(listaFinal));
         window.dispatchEvent(new CustomEvent('hubwash_agendamento_criado', { detail: itemPainel }));
       } catch {}
 
-      // 3. Grava o documento em tempo real no Firebase Firestore na coleção 'agendamentos'
+      // 3. Grava o documento em tempo real no Firebase Firestore com setDoc e ID idêntico
       try {
         if (db) {
-          const docRef = await addDoc(collection(db, 'agendamentos'), {
+          await setDoc(doc(db, 'agendamentos', agendamentoId), {
+            id: agendamentoId,
             unidadeId: unidadeIdNormalizada,
             unidadeVinculadaId: unidadeIdNormalizada,
             unidadeNome: unidadeAtual.nomeFantasia,
@@ -1111,10 +1146,6 @@ export default function AppClientePWA({
             status: 'Pendente',
             createdAt: new Date().toISOString()
           });
-
-          if (docRef?.id) {
-            setTodosAgendamentos(prev => prev.map(ag => ag.id === tempId ? { ...ag, id: docRef.id } : ag));
-          }
         }
       } catch (firebaseErr) {
         console.warn('Agendamento salvo localmente / servidor:', firebaseErr);
@@ -1132,16 +1163,33 @@ export default function AppClientePWA({
   const confirmarCancelamento = async () => {
     if (!agendamentoParaCancelar) return;
     const idParaRemover = agendamentoParaCancelar;
-    setTodosAgendamentos(todosAgendamentos.filter(ag => ag.id !== idParaRemover));
+    setTodosAgendamentos(prev => prev.filter(ag => ag.id !== idParaRemover));
     setAgendamentoParaCancelar(null);
 
     // 1. Exclui no Servidor Central
-    await excluirAgendamentoServidor(idParaRemover);
-
-    // 2. Tenta remover no Firestore
     try {
-      if (db && !idParaRemover.startsWith('17') && isNaN(Number(idParaRemover))) {
+      await excluirAgendamentoServidor(idParaRemover);
+    } catch {}
+
+    // 2. Atualiza localStorage do painel se compartilhado
+    try {
+      const salvosPainel = localStorage.getItem('hubwash_agendamentos_painel');
+      if (salvosPainel) {
+        const listaPainel = JSON.parse(salvosPainel);
+        if (Array.isArray(listaPainel)) {
+          localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(listaPainel.filter((a: any) => a.id !== idParaRemover)));
+        }
+      }
+    } catch {}
+
+    // 3. Remove no Firestore sem condições impeditivas
+    try {
+      if (db) {
         await deleteDoc(doc(db, 'agendamentos', idParaRemover));
+        // Remove também se o id estiver armazenado como campo interno
+        const qDoc = query(collection(db, 'agendamentos'), where('id', '==', idParaRemover));
+        const snap = await getDocs(qDoc);
+        snap.forEach((d) => deleteDoc(d.ref).catch(() => {}));
       }
     } catch (err) {
       console.warn('Erro ao cancelar agendamento no Firestore:', err);
@@ -1150,17 +1198,30 @@ export default function AppClientePWA({
     mostrarToast('Agendamento cancelado com sucesso.', 'info');
   };
 
-  // ➡️ AGENDAMENTOS INDIVIDUAIS: O cliente vê APENAS os seus próprios agendamentos!
-  const meusAgendamentos = todosAgendamentos.filter(ag => {
-    if (!usuarioLogado) return false;
-    const pertenceUnidade = !ag.unidadeId || ag.unidadeId === unidadeAtual?.id || ag.unidadeId === unidadeIdNormalizada;
-    if (!pertenceUnidade) return false;
+  // ➡️ AGENDAMENTOS INDIVIDUAIS: O cliente vê APENAS os seus próprios agendamentos (Deduplicados 100%)
+  const meusAgendamentos = useMemo(() => {
+    if (!usuarioLogado) return [];
+    const filtrados = todosAgendamentos.filter(ag => {
+      const pertenceUnidade = !ag.unidadeId || ag.unidadeId === unidadeAtual?.id || ag.unidadeId === unidadeIdNormalizada;
+      if (!pertenceUnidade) return false;
 
-    const emailIgual = usuarioLogado.email && ag.email && ag.email.toLowerCase().trim() === usuarioLogado.email.toLowerCase().trim();
-    const telIgual = usuarioLogado.contato && ag.telefone && ag.telefone.replace(/\D/g, '') === usuarioLogado.contato.replace(/\D/g, '');
-    const nomeIgual = usuarioLogado.nome && ag.cliente && ag.cliente.toLowerCase().trim() === usuarioLogado.nome.toLowerCase().trim();
-    return emailIgual || telIgual || nomeIgual;
-  });
+      const emailIgual = usuarioLogado.email && ag.email && ag.email.toLowerCase().trim() === usuarioLogado.email.toLowerCase().trim();
+      const telIgual = usuarioLogado.contato && ag.telefone && ag.telefone.replace(/\D/g, '') === usuarioLogado.contato.replace(/\D/g, '');
+      const nomeIgual = usuarioLogado.nome && ag.cliente && ag.cliente.toLowerCase().trim() === usuarioLogado.nome.toLowerCase().trim();
+      return Boolean(emailIgual || telIgual || nomeIgual);
+    });
+
+    // Deduplicação visual absoluta por chave e ID
+    const unicos = new Map<string, Agendamento>();
+    filtrados.forEach(ag => {
+      const chave = `${ag.data}_${ag.horario}_${(ag.servico || '').toLowerCase().trim()}`;
+      if (!unicos.has(chave) && !unicos.has(ag.id)) {
+        unicos.set(chave, ag);
+      }
+    });
+
+    return Array.from(unicos.values());
+  }, [todosAgendamentos, usuarioLogado, unidadeAtual?.id, unidadeIdNormalizada]);
 
   const horariosDisponiveis = [
     '07:00', '07:30', '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',

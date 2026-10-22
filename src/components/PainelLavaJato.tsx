@@ -229,19 +229,30 @@ export default function PainelLavaJato({
   const [novoAgendServico, setNovoAgendServico] = useState('Lavagem Completa');
   const [novoAgendHorario, setNovoAgendHorario] = useState('15:00');
 
-  useEffect(() => {
-    if (agendamentos.length > 0) {
-      try {
-        const salvos = localStorage.getItem('hubwash_agendamentos_painel');
-        const listaExistente = salvos ? JSON.parse(salvos) : [];
-        const mapa = new Map<string, any>();
-        if (Array.isArray(listaExistente)) {
-          listaExistente.forEach(item => mapa.set(item.id, item));
-        }
-        agendamentos.forEach(item => mapa.set(item.id, item));
-        localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(Array.from(mapa.values())));
-      } catch {}
+  // Agendamento atualmente pré-selecionado para abertura direta no Checklist & Fotos
+  const [agendamentoSelecionadoParaChecklist, setAgendamentoSelecionadoParaChecklist] = useState<AgendamentoPWA | null>(null);
+
+  // Registro de IDs excluídos para prevenir que listeners em tempo real ressuscitem itens deletados
+  const idsExcluidosRef = useRef<Set<string>>(new Set((() => {
+    try {
+      const s = localStorage.getItem('hubwash_ids_excluidos');
+      return s ? JSON.parse(s) : [];
+    } catch {
+      return [];
     }
+  })()));
+
+  const registrarIdExcluido = (id: string) => {
+    idsExcluidosRef.current.add(id);
+    try {
+      localStorage.setItem('hubwash_ids_excluidos', JSON.stringify(Array.from(idsExcluidosRef.current)));
+    } catch {}
+  };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(agendamentos));
+    } catch {}
   }, [agendamentos]);
 
   // Slug limpo e padronizado SEM ESPAÇOS nem caracteres especiais para links e QR Codes
@@ -325,9 +336,12 @@ export default function PainelLavaJato({
           if (Array.isArray(lista) && lista.length > 0) {
             setAgendamentos((prev) => {
               const mapa = new Map<string, AgendamentoPWA>();
-              prev.forEach(item => mapa.set(item.id, item));
+              prev
+                .filter(item => !idsExcluidosRef.current.has(item.id))
+                .forEach(item => mapa.set(item.id, item));
               let novosAdicionados = false;
               lista.forEach((item: any) => {
+                if (idsExcluidosRef.current.has(item.id)) return;
                 const docUnidade = String(item.unidadeId || item.unidadeVinculadaId || item.unidadeSlug || item.unidadeNome || '').toLowerCase().trim();
                 const pertence = !docUnidade || aliasesUnidade.some(alias => 
                   docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
@@ -793,10 +807,14 @@ export default function PainelLavaJato({
             if (agendamentosFirestore.length > 0) {
               setAgendamentos((prev) => {
                 const mapa = new Map<string, AgendamentoPWA>();
-                agendamentosFirestore.forEach((a) => mapa.set(a.id, a));
-                prev.forEach((a) => {
-                  if (!mapa.has(a.id)) mapa.set(a.id, a);
-                });
+                agendamentosFirestore
+                  .filter(a => !idsExcluidosRef.current.has(a.id))
+                  .forEach((a) => mapa.set(a.id, a));
+                prev
+                  .filter(a => !idsExcluidosRef.current.has(a.id))
+                  .forEach((a) => {
+                    if (!mapa.has(a.id)) mapa.set(a.id, a);
+                  });
                 const listaFinal = Array.from(mapa.values());
                 try {
                   localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(listaFinal));
@@ -821,7 +839,7 @@ export default function PainelLavaJato({
               const pertence = !docUnidade || aliasesUnidade.some(alias => 
                 docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
               );
-              if (pertence) {
+              if (pertence && !idsExcluidosRef.current.has(docSnap.id)) {
                 bannersFirestore.push({
                   id: docSnap.id,
                   titulo: data.titulo || 'Promoção',
@@ -838,10 +856,14 @@ export default function PainelLavaJato({
             if (bannersFirestore.length > 0) {
               setBanners((prev) => {
                 const mapa = new Map<string, BannerPromocional>();
-                bannersFirestore.forEach((b) => mapa.set(b.id, b));
-                prev.forEach((b) => {
-                  if (!mapa.has(b.id)) mapa.set(b.id, b);
-                });
+                bannersFirestore
+                  .filter(b => !idsExcluidosRef.current.has(b.id))
+                  .forEach((b) => mapa.set(b.id, b));
+                prev
+                  .filter(b => !idsExcluidosRef.current.has(b.id))
+                  .forEach((b) => {
+                    if (!mapa.has(b.id)) mapa.set(b.id, b);
+                  });
                 return Array.from(mapa.values());
               });
             }
@@ -862,7 +884,7 @@ export default function PainelLavaJato({
               const pertence = !docUnidade || aliasesUnidade.some(alias => 
                 docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
               );
-              if (pertence) {
+              if (pertence && !idsExcluidosRef.current.has(docSnap.id)) {
                 servicosFirestore.push({
                   id: docSnap.id,
                   nome: data.nome || 'Serviço',
@@ -879,10 +901,14 @@ export default function PainelLavaJato({
             if (servicosFirestore.length > 0) {
               setServicos((prev) => {
                 const mapa = new Map<string, ServicoLavaJato>();
-                servicosFirestore.forEach((s) => mapa.set(s.id, s));
-                prev.forEach((s) => {
-                  if (!mapa.has(s.id)) mapa.set(s.id, s);
-                });
+                servicosFirestore
+                  .filter(s => !idsExcluidosRef.current.has(s.id))
+                  .forEach((s) => mapa.set(s.id, s));
+                prev
+                  .filter(s => !idsExcluidosRef.current.has(s.id))
+                  .forEach((s) => {
+                    if (!mapa.has(s.id)) mapa.set(s.id, s);
+                  });
                 return Array.from(mapa.values());
               });
             }
@@ -913,30 +939,69 @@ export default function PainelLavaJato({
     if (!itemParaExcluir) return;
 
     const { tipo, id, nome } = itemParaExcluir;
+    registrarIdExcluido(id);
 
     if (tipo === 'fila') {
       setVeiculosFila(prev => prev.filter(item => item.id !== id));
     } else if (tipo === 'agendamento') {
-      setAgendamentos(prev => prev.filter(item => item.id !== id));
+      setAgendamentos(prev => {
+        const atualizados = prev.filter(item => item.id !== id);
+        try {
+          localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(atualizados));
+        } catch {}
+        return atualizados;
+      });
       try {
         await excluirAgendamentoServidor(id);
-        if (db && !id.startsWith('17') && isNaN(Number(id))) {
+      } catch {}
+      if (db) {
+        try {
           await deleteDoc(doc(db, 'agendamentos', id));
-        }
-      } catch (err) {
-        console.warn('Erro ao remover agendamento:', err);
+        } catch {}
+        try {
+          const qAg = query(collection(db, 'agendamentos'), where('id', '==', id));
+          const snap = await getDocs(qAg);
+          snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
+        } catch {}
       }
     } else if (tipo === 'checklist') {
-      setChecklists(prev => prev.filter(item => item.id !== id));
+      setChecklists(prev => {
+        const atualizados = prev.filter(item => item.id !== id);
+        try {
+          localStorage.setItem('hubwash_checklists', JSON.stringify(atualizados));
+        } catch {}
+        return atualizados;
+      });
+      if (db) {
+        try {
+          await deleteDoc(doc(db, 'checklists', id));
+        } catch {}
+        try {
+          const qChk = query(collection(db, 'checklists'), where('id', '==', id));
+          const snap = await getDocs(qChk);
+          snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
+        } catch {}
+      }
     } else if (tipo === 'cliente') {
-      setClientes(prev => prev.filter(item => item.id !== id));
+      setClientes(prev => {
+        const atualizados = prev.filter(item => item.id !== id);
+        try {
+          localStorage.setItem('hubwash_clientes_fidelidade', JSON.stringify(atualizados));
+        } catch {}
+        return atualizados;
+      });
       try {
         await excluirClienteServidor(id);
-        if (db && !id.startsWith('17') && isNaN(Number(id))) {
+      } catch {}
+      if (db) {
+        try {
           await deleteDoc(doc(db, 'clientes', id));
-        }
-      } catch (err) {
-        console.warn('Erro ao remover cliente:', err);
+        } catch {}
+        try {
+          const qCli = query(collection(db, 'clientes'), where('id', '==', id));
+          const snap = await getDocs(qCli);
+          snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
+        } catch {}
       }
     } else if (tipo === 'funcionario') {
       setFuncionarios(prev => prev.filter(item => item.id !== id));
@@ -945,24 +1010,48 @@ export default function PainelLavaJato({
     } else if (tipo === 'movimentacao') {
       setMovimentacoesCaixa(prev => prev.filter(item => item.id !== id));
     } else if (tipo === 'banner') {
-      setBanners(prev => prev.filter(item => item.id !== id));
+      setBanners(prev => {
+        const atualizados = prev.filter(item => item.id !== id);
+        try {
+          localStorage.setItem('hubwash_banners', JSON.stringify(atualizados));
+          if (unidadeLogada) localStorage.setItem(`hubwash_banners_${unidadeLogada}`, JSON.stringify(atualizados));
+        } catch {}
+        return atualizados;
+      });
       try {
         await excluirBannerServidor(id);
-        if (db && !id.startsWith('17') && isNaN(Number(id))) {
+      } catch {}
+      if (db) {
+        try {
           await deleteDoc(doc(db, 'banners', id));
-        }
-      } catch (err) {
-        console.warn('Erro ao remover banner:', err);
+        } catch {}
+        try {
+          const qBan = query(collection(db, 'banners'), where('id', '==', id));
+          const snap = await getDocs(qBan);
+          snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
+        } catch {}
       }
     } else if (tipo === 'servico') {
-      setServicos(prev => prev.filter(item => item.id !== id));
+      setServicos(prev => {
+        const atualizados = prev.filter(item => item.id !== id);
+        try {
+          localStorage.setItem('hubwash_servicos', JSON.stringify(atualizados));
+          if (unidadeLogada) localStorage.setItem(`hubwash_servicos_${unidadeLogada}`, JSON.stringify(atualizados));
+        } catch {}
+        return atualizados;
+      });
       try {
         await excluirServicoServidor(id);
-        if (db && !id.startsWith('srv_') && isNaN(Number(id))) {
+      } catch {}
+      if (db) {
+        try {
           await deleteDoc(doc(db, 'servicos', id));
-        }
-      } catch (err) {
-        console.warn('Erro ao remover serviço:', err);
+        } catch {}
+        try {
+          const qSrv = query(collection(db, 'servicos'), where('id', '==', id));
+          const snap = await getDocs(qSrv);
+          snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
+        } catch {}
       }
     }
 
@@ -2356,6 +2445,20 @@ export default function PainelLavaJato({
 
                         <button
                           type="button"
+                          onClick={() => {
+                            setAgendamentoSelecionadoParaChecklist(ag);
+                            setAbaAtiva('checklist');
+                            mostrarToast(`Veículo de ${ag.cliente} reservado no Checklist para fotos!`, 'sucesso');
+                          }}
+                          className="px-2.5 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-semibold transition cursor-pointer flex items-center gap-1.5"
+                          title="Abrir no Checklist e Fotografar o Veículo"
+                        >
+                          <Camera size={13} className="text-cyan-400" />
+                          <span>Vistoriar & Fotos</span>
+                        </button>
+
+                        <button
+                          type="button"
                           onClick={() => handlePontuarAgendamento(ag)}
                           className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-semibold transition cursor-pointer flex items-center gap-1"
                           title="Enviar +1 Ponto de Fidelidade para o Cliente"
@@ -2700,8 +2803,36 @@ export default function PainelLavaJato({
           {abaAtiva === 'checklist' && (
             <SistemaChecklist
               checklists={checklists}
-              onSalvarChecklist={(novaVistoria) => {
+              agendamentosPendentes={agendamentos.filter(a => a.status !== 'Concluido' && a.status !== 'Cancelado')}
+              agendamentoPreSelecionado={agendamentoSelecionadoParaChecklist}
+              onLimparAgendamentoPreSelecionado={() => setAgendamentoSelecionadoParaChecklist(null)}
+              onSalvarChecklist={(novaVistoria, agendamentoIdOrigem) => {
                 setChecklists(prev => [novaVistoria, ...prev]);
+
+                // Atualiza o agendamento de origem se vinculado
+                if (agendamentoIdOrigem) {
+                  setAgendamentos(prev => prev.map(a => a.id === agendamentoIdOrigem ? { ...a, status: 'Vistoriado' } : a));
+                  if (db) {
+                    try {
+                      updateDoc(doc(db, 'agendamentos', agendamentoIdOrigem), { status: 'Vistoriado' }).catch(() => {});
+                    } catch {}
+                  }
+                }
+
+                // Insere automaticamente na fila de lavagem do lava jato
+                const veiculoTexto = `${novaVistoria.veiculo}${novaVistoria.placa ? ` (${novaVistoria.placa})` : ''}`;
+                const novoItemFila: ItemFila = {
+                  id: String(Date.now()),
+                  cliente: novaVistoria.cliente || 'Cliente Vistoriado',
+                  veiculo: veiculoTexto,
+                  servico: 'Lavagem Completa',
+                  status: 'Espera',
+                  funcionario: funcionarios[0]?.nome || 'Lavador Geral',
+                  valor: 65,
+                  horaEntrada: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                };
+                setVeiculosFila(prev => [novoItemFila, ...prev]);
+
                 if (db) {
                   try {
                     addDoc(collection(db, 'checklists'), {
@@ -2714,7 +2845,8 @@ export default function PainelLavaJato({
                     console.warn('Erro ao salvar checklist:', e);
                   }
                 }
-                mostrarToast('Vistoria e Fotos arquivadas com sucesso!', 'sucesso');
+                setAgendamentoSelecionadoParaChecklist(null);
+                mostrarToast(`✅ Vistoria de "${novaVistoria.veiculo}" gravada com ${novaVistoria.fotos} fotos e inserida na Fila de Lavagem!`, 'sucesso');
               }}
               onExcluirChecklist={(id, nome) => {
                 setItemParaExcluir({ tipo: 'checklist', id, nome });
