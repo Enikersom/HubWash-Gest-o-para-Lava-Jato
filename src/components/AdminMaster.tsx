@@ -24,8 +24,6 @@ import {
   ArrowLeft, 
   Download, 
   X, 
-  Database, 
-  RefreshCw,
   UserPlus
 } from 'lucide-react';
 import { LavaJato } from '../types';
@@ -37,8 +35,7 @@ import {
   setDoc, 
   updateDoc, 
   deleteDoc, 
-  onSnapshot,
-  getFirebaseStatus 
+  onSnapshot 
 } from '../firebase';
 import {
   buscarUnidadesServidor,
@@ -100,78 +97,23 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
   const [senhaProvisoria, setSenhaProvisoria] = useState('');
   const [valorPlano, setValorPlano] = useState('149.90');
 
-  // ESTADO DO FIREBASE E DIAGNÓSTICO DE PERMISSÕES
-  const firebaseStatus = getFirebaseStatus();
-  const [erroPermissaoFirebase, setErroPermissaoFirebase] = useState(false);
-  const [testandoFirebase, setTestandoFirebase] = useState(false);
-  const [resultadoTesteFirebase, setResultadoTesteFirebase] = useState<{ sucesso: boolean; mensagem: string } | null>(null);
+  // SINCRONIZAÇÃO AUTOMÁTICA EM SEGUNDO PLANO COM O CLOUD FIRESTORE
+  useEffect(() => {
+    if (!db || !Array.isArray(lavaJatos) || lavaJatos.length === 0) return;
 
-  const testarConexaoFirebase = async () => {
-    if (!db) {
-      setResultadoTesteFirebase({ sucesso: false, mensagem: 'Firebase não está inicializado.' });
-      return;
-    }
-    setTestandoFirebase(true);
-    setResultadoTesteFirebase(null);
-    try {
-      await setDoc(doc(db, 'teste_conexao', 'ping'), {
-        data: new Date().toISOString(),
-        teste: 'Conexao OK'
+    // Envio automático contínuo de todas as empresas para o Banco de Dados (Firestore)
+    const timerSync = setTimeout(() => {
+      lavaJatos.forEach(async (u) => {
+        try {
+          await setDoc(doc(db, 'unidades', u.id), u, { merge: true });
+        } catch (err) {
+          console.warn(`[Auto-Sync Firestore] Erro ao gravar unidade ${u.id}:`, err);
+        }
       });
-      setErroPermissaoFirebase(false);
-      setResultadoTesteFirebase({
-        sucesso: true,
-        mensagem: '✅ Sucesso! O Firestore aceitou a gravação. O banco de dados está online e liberado!'
-      });
-      mostrarToast('✅ Firebase conectado e gravando perfeitamente!', 'sucesso');
-    } catch (e: any) {
-      const msg = String(e?.message || e?.code || '');
-      if (msg.includes('permission-denied') || msg.includes('PERMISSION_DENIED')) {
-        setErroPermissaoFirebase(true);
-        setResultadoTesteFirebase({
-          sucesso: false,
-          mensagem: '❌ PERMISSION_DENIED: O Firebase recusou a gravação. No Firebase Console > Firestore Database > Regras, altere a linha 3 de "match /bancodb/..." para "match /databases/{database}/documents" e clique em PUBLICAR.'
-        });
-        mostrarToast('❌ O Firebase rejeitou a gravação (PERMISSION_DENIED nas regras).', 'erro');
-      } else {
-        setResultadoTesteFirebase({ sucesso: false, mensagem: `Erro ao testar: ${e?.message || 'Falha de conexão'}` });
-      }
-    } finally {
-      setTestandoFirebase(false);
-    }
-  };
+    }, 500);
 
-  const sincronizarTodasUnidadesFirestore = async () => {
-    if (!db) {
-      mostrarToast('Firebase não inicializado.', 'erro');
-      return;
-    }
-    setTestandoFirebase(true);
-    try {
-      let enviados = 0;
-      for (const u of lavaJatos) {
-        await setDoc(doc(db, 'unidades', u.id), u);
-        enviados++;
-      }
-      setErroPermissaoFirebase(false);
-      setResultadoTesteFirebase({ sucesso: true, mensagem: `✅ ${enviados} empresa(s) sincronizada(s) com sucesso no Firebase!` });
-      mostrarToast(`✅ ${enviados} empresa(s) sincronizada(s) com sucesso no Firebase!`, 'sucesso');
-    } catch (e: any) {
-      const msg = String(e?.message || e?.code || '');
-      if (msg.includes('permission-denied') || msg.includes('PERMISSION_DENIED')) {
-        setErroPermissaoFirebase(true);
-        setResultadoTesteFirebase({
-          sucesso: false,
-          mensagem: '❌ PERMISSION_DENIED: O Firebase recusou o envio. Altere a linha 3 das regras no Firebase Console para: match /databases/{database}/documents e clique em Publicar.'
-        });
-        mostrarToast('❌ Permissão negada pelo Firebase.', 'erro');
-      } else {
-        setResultadoTesteFirebase({ sucesso: false, mensagem: `Erro: ${e?.message || 'Falha de conexão'}` });
-      }
-    } finally {
-      setTestandoFirebase(false);
-    }
-  };
+    return () => clearTimeout(timerSync);
+  }, [lavaJatos]);
 
   const mostrarToast = (mensagem: string, tipo: 'sucesso' | 'erro' | 'info' = 'sucesso') => {
     setToast({ mensagem, tipo });
@@ -348,19 +290,13 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
       console.warn('Erro ao salvar unidade no servidor:', err);
     }
 
-    // Persistência no Cloud Firestore
+    // Persistência automática no Cloud Firestore
     try {
       if (db) {
-        await setDoc(doc(db, 'unidades', slug), novoLavaJato);
-        setErroPermissaoFirebase(false);
+        await setDoc(doc(db, 'unidades', slug), novoLavaJato, { merge: true });
       }
     } catch (err: any) {
-      console.error('Erro ao salvar unidade no Firestore:', err);
-      const msg = String(err?.message || err?.code || '');
-      if (msg.includes('permission-denied') || msg.includes('PERMISSION_DENIED')) {
-        setErroPermissaoFirebase(true);
-        mostrarToast('⚠️ Empresa salva localmente, mas o Firebase recusou a gravação por Regra de Segurança (PERMISSION_DENIED). Altere a linha 3 para "match /databases/{database}/documents".', 'erro');
-      }
+      console.warn('Erro ao salvar unidade automaticamente no Firestore:', err);
     }
     
     // CONFIGURA O QR CODE PARA APARECER LOGO APÓS O CADASTRO
@@ -669,96 +605,6 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
 
       {/* CONTEÚDO */}
       <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8 space-y-8 flex-1 w-full">
-        
-        {/* PAINEL DE DIAGNÓSTICO E SINCRONIZAÇÃO DO FIREBASE */}
-        <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-4 shadow-xl space-y-3">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-700/60 pb-3">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
-                <Database size={18} />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-white">Sincronização Cloud Firestore</h3>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                    erroPermissaoFirebase 
-                      ? 'bg-rose-500/20 border border-rose-500/30 text-rose-400' 
-                      : firebaseStatus.configurado 
-                      ? 'bg-emerald-500/20 border border-emerald-500/30 text-emerald-400' 
-                      : 'bg-amber-500/20 border border-amber-500/30 text-amber-400'
-                  }`}>
-                    {erroPermissaoFirebase ? '● Permissão Negada (Regras)' : firebaseStatus.configurado ? '● Conectado' : '● Modo Local'}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-400">
-                  Projeto Firebase: <span className="font-mono text-cyan-300 font-bold">{firebaseStatus.projectId || 'Não configurado'}</span>
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                type="button"
-                disabled={testandoFirebase}
-                onClick={testarConexaoFirebase}
-                className="py-1.5 px-3 bg-cyan-600/90 hover:bg-cyan-500 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-md shadow-cyan-600/20 disabled:opacity-50"
-              >
-                <RefreshCw size={13} className={testandoFirebase ? 'animate-spin' : ''} />
-                <span>Testar Gravação no BD</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={testandoFirebase}
-                onClick={sincronizarTodasUnidadesFirestore}
-                className="py-1.5 px-3 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold rounded-xl border border-slate-600 transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-                title="Envia todas as empresas salvas no navegador diretamente para o Cloud Firestore"
-              >
-                <CheckCircle2 size={13} className="text-emerald-400" />
-                <span>Enviar Empresas ao BD</span>
-              </button>
-            </div>
-          </div>
-
-          {resultadoTesteFirebase && (
-            <div className={`p-3 rounded-xl border text-xs leading-relaxed ${
-              resultadoTesteFirebase.sucesso 
-                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200' 
-                : 'bg-rose-950/40 border-rose-500/40 text-rose-200'
-            }`}>
-              <p className="font-semibold">{resultadoTesteFirebase.mensagem}</p>
-            </div>
-          )}
-
-          {erroPermissaoFirebase && (
-            <div className="bg-rose-950/40 border border-rose-500/40 rounded-xl p-3.5 space-y-2 text-xs">
-              <div className="flex items-center gap-2 text-rose-300 font-bold">
-                <AlertTriangle size={16} className="text-rose-400 shrink-0" />
-                <span>Por que seus clientes ou empresas não estão aparecendo no Banco de Dados (Firestore)?</span>
-              </div>
-              <p className="text-slate-300 text-[11px] leading-relaxed">
-                O Firebase recusou a gravação com o erro <strong className="text-rose-300">PERMISSION_DENIED</strong>. Isso ocorre porque na linha 3 das Regras do Firestore foi digitado <code className="text-amber-300 bg-black/40 px-1 py-0.5 rounded">match /bancodb/...</code> em vez da palavra obrigatória <code className="text-emerald-300 bg-black/40 px-1 py-0.5 rounded">match /databases/...</code>.
-              </p>
-              <div className="bg-slate-950 border border-slate-800 rounded-lg p-2.5 font-mono text-[10px] text-emerald-300 space-y-0.5 overflow-x-auto">
-                <p className="text-slate-500">// Cole exatamente assim no Firebase Console &gt; Firestore &gt; Regras:</p>
-                <p>rules_version = '2';</p>
-                <p>service cloud.firestore &#123;</p>
-                <p className="font-bold text-amber-300">&nbsp;&nbsp;match /databases/&#123;database&#125;/documents &#123;</p>
-                <p>&nbsp;&nbsp;&nbsp;&nbsp;match /unidades/&#123;id&#125; &#123; allow read, write: if true; &#125;</p>
-                <p>&nbsp;&nbsp;&nbsp;&nbsp;match /clientes/&#123;id&#125; &#123; allow read, write: if true; &#125;</p>
-                <p>&nbsp;&nbsp;&nbsp;&nbsp;match /agendamentos/&#123;id&#125; &#123; allow read, write: if true; &#125;</p>
-                <p>&nbsp;&nbsp;&nbsp;&nbsp;match /teste_conexao/&#123;id&#125; &#123; allow read, write: if true; &#125;</p>
-                <p className="text-rose-400">&nbsp;&nbsp;&nbsp;&nbsp;match /&#123;document=**&#125; &#123; allow read, write: if false; &#125;</p>
-                <p>&nbsp;&nbsp;&#125;</p>
-                <p>&#125;</p>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                Após colar e clicar em <strong>Publicar</strong> no Firebase Console, clique no botão <strong>"Enviar Empresas ao BD"</strong> acima para gravar todas as empresas e clientes imediatamente no Firestore.
-              </p>
-            </div>
-          )}
-        </div>
-
         {/* CARDS DE RESUMO MASTER */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4">

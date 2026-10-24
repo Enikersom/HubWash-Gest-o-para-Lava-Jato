@@ -3966,11 +3966,11 @@ export default function PainelLavaJato({
                             };
                             localStorage.setItem('hubwash_lava_jatos', JSON.stringify(lista));
                             if (db) {
-                              await updateDoc(doc(db, 'unidades', lista[idx].id), {
+                              await setDoc(doc(db, 'unidades', lista[idx].id), {
                                 nomeFantasia: nomeLavaJato,
                                 contato: contatoLavaJato,
                                 endereco: enderecoLavaJato
-                              }).catch(() => {});
+                              }, { merge: true }).catch(() => {});
                             }
                           }
                         }
