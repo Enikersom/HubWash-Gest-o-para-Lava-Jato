@@ -22,6 +22,8 @@ export interface ItemFila {
   funcionario: string;
   valor: number;
   horaEntrada?: string;
+  agendamentoId?: string;
+  unidadeId?: string;
 }
 
 export interface Funcionario {
@@ -108,10 +110,12 @@ export interface AgendamentoPWA {
   servico: string;
   data: string;
   horario: string;
-  status: 'Pendente' | 'Confirmado' | 'Concluido' | 'Cancelado' | 'Em Atendimento' | 'Vistoriado';
+  status: 'Pendente' | 'Confirmado' | 'Concluido' | 'Cancelado' | 'Em Atendimento' | 'Vistoriado' | 'Espera' | 'Lavando' | 'Pronto';
   unidadeId?: string;
   unidadeVinculadaId?: string;
   email?: string;
+  valor?: number | string;
+  statusLavagem?: string;
 }
 
 export interface ServicoLavaJato {

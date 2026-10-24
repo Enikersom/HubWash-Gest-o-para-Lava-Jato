@@ -52,7 +52,7 @@ import {
   Tag,
   Edit3
 } from 'lucide-react';
-import { db, collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, where, orderBy, getDocs, getFirebaseStatus, salvarFirebaseConfig } from '../firebase';
+import { db, collection, addDoc, setDoc, onSnapshot, doc, updateDoc, deleteDoc, query, where, orderBy, getDocs, getFirebaseStatus, salvarFirebaseConfig } from '../firebase';
 import { 
   buscarDadosSincronizados, 
   registrarClienteServidor, 
@@ -1015,6 +1015,8 @@ export default function PainelLavaJato({
         try {
           localStorage.setItem('hubwash_banners', JSON.stringify(atualizados));
           if (unidadeLogada) localStorage.setItem(`hubwash_banners_${unidadeLogada}`, JSON.stringify(atualizados));
+          window.dispatchEvent(new CustomEvent('hubwash_banners_atualizados', { detail: atualizados }));
+          window.dispatchEvent(new Event('hubwash_banners_atualizados'));
         } catch {}
         return atualizados;
       });
@@ -1063,53 +1065,186 @@ export default function PainelLavaJato({
   // FUNÇÕES DE AÇÃO
   // ==========================================
 
-  // Avançar status da Fila
-  const avancarStatusFila = (id: string) => {
-    setVeiculosFila(veiculosFila.map(veiculo => {
+  // Avançar status da Fila com sincronização em tempo real para o Cliente
+  const avancarStatusFila = async (id: string) => {
+    const itemAlvo = veiculosFila.find(v => v.id === id);
+    if (!itemAlvo) return;
+
+    let proximoStatus: ItemFila['status'] = itemAlvo.status;
+
+    if (itemAlvo.status === 'Espera') {
+      proximoStatus = 'Lavando';
+      mostrarToast(`🚿 Veículo "${itemAlvo.veiculo}" agora está no Box em Lavagem!`, 'info');
+    } else if (itemAlvo.status === 'Lavando') {
+      proximoStatus = 'Pronto';
+      // GERAR COMISSÃO AUTOMÁTICA
+      const func = funcionarios.find(f => f.nome === itemAlvo.funcionario);
+      const perc = func ? func.comissaoPorcentagem : 30;
+      const valorComissao = (itemAlvo.valor * perc) / 100;
+
+      setFuncionarios(funcionarios.map(f =>
+        f.nome === itemAlvo.funcionario
+          ? { ...f, totalComissaoAcumulada: f.totalComissaoAcumulada + valorComissao }
+          : f
+      ));
+
+      // LANÇAR NO CAIXA AUTOMATICAMENTE
+      setMovimentacoesCaixa([
+        { id: String(Date.now()), descricao: `Recebimento: ${itemAlvo.servico} (${itemAlvo.veiculo})`, tipo: 'entrada', valor: itemAlvo.valor, data: 'Hoje' },
+        ...movimentacoesCaixa
+      ]);
+
+      mostrarToast(`✨ Veículo "${itemAlvo.veiculo}" pronto para retirada! R$ ${valorComissao.toFixed(2)} de comissão gerada e R$ ${itemAlvo.valor.toFixed(2)} lançado no Caixa.`, 'sucesso');
+    } else if (itemAlvo.status === 'Pronto') {
+      proximoStatus = 'Entregue';
+      mostrarToast(`🎉 Veículo "${itemAlvo.veiculo}" finalizado e entregue ao cliente!`, 'sucesso');
+    }
+
+    // 1. Atualiza Fila
+    const filaAtualizada = veiculosFila.map(veiculo => {
       if (veiculo.id === id) {
-        let proximoStatus: ItemFila['status'] = veiculo.status;
-
-        if (veiculo.status === 'Espera') {
-          proximoStatus = 'Lavando';
-          mostrarToast(`Veículo "${veiculo.veiculo}" agora está em Lavagem!`, 'info');
-        } else if (veiculo.status === 'Lavando') {
-          proximoStatus = 'Pronto';
-          // GERAR COMISSÃO AUTOMÁTICA
-          const func = funcionarios.find(f => f.nome === veiculo.funcionario);
-          const perc = func ? func.comissaoPorcentagem : 30;
-          const valorComissao = (veiculo.valor * perc) / 100;
-
-          setFuncionarios(funcionarios.map(f =>
-            f.nome === veiculo.funcionario
-              ? { ...f, totalComissaoAcumulada: f.totalComissaoAcumulada + valorComissao }
-              : f
-          ));
-
-          // LANÇAR NO CAIXA AUTOMATICAMENTE
-          setMovimentacoesCaixa([
-            { id: String(Date.now()), descricao: `Recebimento: ${veiculo.servico} (${veiculo.veiculo})`, tipo: 'entrada', valor: veiculo.valor, data: 'Hoje' },
-            ...movimentacoesCaixa
-          ]);
-
-          mostrarToast(`Veículo "${veiculo.veiculo}" pronto! R$ ${valorComissao.toFixed(2)} de comissão gerada e R$ ${veiculo.valor.toFixed(2)} lançado no Caixa.`, 'sucesso');
-        } else if (veiculo.status === 'Pronto') {
-          proximoStatus = 'Entregue';
-          mostrarToast(`Veículo "${veiculo.veiculo}" finalizado e entregue ao cliente!`, 'sucesso');
-        }
-
         return { ...veiculo, status: proximoStatus };
       }
       return veiculo;
-    }));
+    });
+    setVeiculosFila(filaAtualizada);
+    try {
+      localStorage.setItem('hubwash_fila', JSON.stringify(filaAtualizada));
+    } catch {}
+
+    // 2. Mapeia e sincroniza com o Agendamento do cliente
+    const statusAgendamento: AgendamentoPWA['status'] = proximoStatus === 'Entregue' ? 'Concluido' : proximoStatus;
+
+    const agCorrespondente = agendamentos.find(a =>
+      (itemAlvo.agendamentoId && a.id === itemAlvo.agendamentoId) ||
+      (a.cliente && a.cliente.toLowerCase().trim() === itemAlvo.cliente.toLowerCase().trim())
+    );
+
+    if (agCorrespondente) {
+      const agId = agCorrespondente.id;
+      const agsAtualizados = agendamentos.map(a => a.id === agId ? { ...a, status: statusAgendamento } : a);
+      setAgendamentos(agsAtualizados);
+      try {
+        localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(agsAtualizados));
+        localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(agsAtualizados));
+      } catch {}
+
+      // Dispara evento em tempo real para o PWA do cliente
+      window.dispatchEvent(new CustomEvent('hubwash_status_lavagem_atualizado', {
+        detail: { agendamentoId: agId, cliente: itemAlvo.cliente, status: statusAgendamento }
+      }));
+      window.dispatchEvent(new Event('hubwash_agendamento_alterado'));
+
+      // Atualiza Firestore
+      if (db) {
+        try {
+          await setDoc(doc(db, 'agendamentos', agId), {
+            status: statusAgendamento,
+            statusLavagem: proximoStatus,
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        } catch {
+          try {
+            const q = query(collection(db, 'agendamentos'), where('id', '==', agId));
+            const snap = await getDocs(q);
+            snap.forEach(d => updateDoc(d.ref, { status: statusAgendamento, statusLavagem: proximoStatus }).catch(() => {}));
+          } catch {}
+        }
+      }
+
+      try {
+        await atualizarStatusAgendamentoServidor(agId, statusAgendamento as any);
+      } catch {}
+    } else {
+      window.dispatchEvent(new CustomEvent('hubwash_status_lavagem_atualizado', {
+        detail: { cliente: itemAlvo.cliente, status: statusAgendamento }
+      }));
+    }
   };
 
-  // Adicionar Veículo na Fila
-  const handleCadastrarFila = (e: React.FormEvent) => {
+  // Puxar agendamento diretamente para a Fila de Lavagem com status inicial 'Espera'
+  const puxarAgendamentoParaFila = async (ag: AgendamentoPWA) => {
+    const jaNaFila = veiculosFila.find(v =>
+      (v.agendamentoId && v.agendamentoId === ag.id) ||
+      (v.cliente.toLowerCase().trim() === ag.cliente.toLowerCase().trim() && v.status !== 'Entregue')
+    );
+
+    if (jaNaFila) {
+      mostrarToast(`O veículo de ${ag.cliente} já está na Fila de Lavagem (Status: ${jaNaFila.status})!`, 'info');
+      setAbaAtiva('fila');
+      return;
+    }
+
+    const valorNumerico = parseFloat(ag.valor ? String(ag.valor).replace('R$', '').replace(',', '.').trim() : '80') || 80;
+
+    const novoItem: ItemFila = {
+      id: `fila_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      cliente: ag.cliente,
+      veiculo: ag.veiculo,
+      servico: ag.servico || 'Lavagem Completa',
+      status: 'Espera',
+      funcionario: funcionarios[0]?.nome || 'Equipe de Pátio',
+      valor: valorNumerico,
+      horaEntrada: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      agendamentoId: ag.id,
+      unidadeId: ag.unidadeId || unidadeLogada || 'padrao'
+    };
+
+    const novaFila = [novoItem, ...veiculosFila];
+    setVeiculosFila(novaFila);
+    try {
+      localStorage.setItem('hubwash_fila', JSON.stringify(novaFila));
+    } catch {}
+
+    // Sincroniza agendamento para 'Espera'
+    const agsAtualizados = agendamentos.map(a => a.id === ag.id ? { ...a, status: 'Espera' as const } : a);
+    setAgendamentos(agsAtualizados);
+    try {
+      localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(agsAtualizados));
+      localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(agsAtualizados));
+    } catch {}
+
+    window.dispatchEvent(new CustomEvent('hubwash_status_lavagem_atualizado', {
+      detail: { agendamentoId: ag.id, cliente: ag.cliente, status: 'Espera' }
+    }));
+    window.dispatchEvent(new Event('hubwash_agendamento_alterado'));
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'agendamentos', ag.id), {
+          status: 'Espera',
+          statusLavagem: 'Espera',
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch {
+        try {
+          const q = query(collection(db, 'agendamentos'), where('id', '==', ag.id));
+          const snap = await getDocs(q);
+          snap.forEach(d => updateDoc(d.ref, { status: 'Espera', statusLavagem: 'Espera' }).catch(() => {}));
+        } catch {}
+      }
+    }
+
+    try {
+      await atualizarStatusAgendamentoServidor(ag.id, 'Espera' as any);
+    } catch {}
+
+    setAbaAtiva('fila');
+    mostrarToast(`🚗 "${ag.cliente}" entrou na Fila de Lavagem (Status: Espera)! Cliente já visualiza em tempo real.`, 'sucesso');
+  };
+
+  // Adicionar Veículo na Fila manualmente
+  const handleCadastrarFila = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!novoClienteFila.trim() || !novoVeiculoFila.trim()) {
       mostrarToast('Preencha o nome do cliente e veículo.', 'erro');
       return;
     }
+
+    const agCorrespondente = agendamentos.find(a =>
+      a.cliente.toLowerCase().trim() === novoClienteFila.toLowerCase().trim() &&
+      a.status !== 'Concluido' && a.status !== 'Cancelado'
+    );
 
     const novoItem: ItemFila = {
       id: String(Date.now()),
@@ -1117,15 +1252,45 @@ export default function PainelLavaJato({
       veiculo: novoVeiculoFila.trim(),
       servico: novoServicoFila,
       status: 'Espera',
-      funcionario: novoFuncFila,
+      funcionario: novoFuncFila || funcionarios[0]?.nome || 'Equipe de Pátio',
       valor: parseFloat(novoValorFila) || 50,
-      horaEntrada: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      horaEntrada: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      agendamentoId: agCorrespondente?.id,
+      unidadeId: unidadeLogada
     };
 
-    setVeiculosFila([novoItem, ...veiculosFila]);
+    const novaFila = [novoItem, ...veiculosFila];
+    setVeiculosFila(novaFila);
+    try {
+      localStorage.setItem('hubwash_fila', JSON.stringify(novaFila));
+    } catch {}
+
+    if (agCorrespondente) {
+      const agId = agCorrespondente.id;
+      const agsAtualizados = agendamentos.map(a => a.id === agId ? { ...a, status: 'Espera' as const } : a);
+      setAgendamentos(agsAtualizados);
+      try {
+        localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(agsAtualizados));
+        localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(agsAtualizados));
+      } catch {}
+
+      window.dispatchEvent(new CustomEvent('hubwash_status_lavagem_atualizado', {
+        detail: { agendamentoId: agId, cliente: agCorrespondente.cliente, status: 'Espera' }
+      }));
+      window.dispatchEvent(new Event('hubwash_agendamento_alterado'));
+
+      if (db) {
+        setDoc(doc(db, 'agendamentos', agId), {
+          status: 'Espera',
+          statusLavagem: 'Espera',
+          updatedAt: new Date().toISOString()
+        }, { merge: true }).catch(() => {});
+      }
+    }
+
     setNovoClienteFila('');
     setNovoVeiculoFila('');
-    mostrarToast(`Veículo ${novoItem.veiculo} adicionado na fila de lavagem!`, 'sucesso');
+    mostrarToast(`Veículo ${novoItem.veiculo} adicionado na fila com status "Espera"!`, 'sucesso');
   };
 
   // Pontos de Fidelidade (Exclusivo do Administrador)
@@ -1271,19 +1436,46 @@ export default function PainelLavaJato({
     }
   };
 
-  // Atualizar Status do Agendamento
-  const handleAtualizarStatusAgendamento = async (id: string, novoStatus: 'Pendente' | 'Confirmado' | 'Concluido' | 'Cancelado') => {
+  // Atualizar Status do Agendamento com sincronização imediata
+  const handleAtualizarStatusAgendamento = async (id: string, novoStatus: 'Pendente' | 'Confirmado' | 'Espera' | 'Lavando' | 'Pronto' | 'Concluido' | 'Cancelado') => {
     setAgendamentos((prev) => prev.map((a) => (a.id === id ? { ...a, status: novoStatus } : a)));
 
     try {
+      const atualizados = agendamentos.map((a) => (a.id === id ? { ...a, status: novoStatus } : a));
+      localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(atualizados));
+      localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(atualizados));
+    } catch {}
+
+    window.dispatchEvent(new CustomEvent('hubwash_status_lavagem_atualizado', {
+      detail: { agendamentoId: id, status: novoStatus }
+    }));
+    window.dispatchEvent(new Event('hubwash_agendamento_alterado'));
+
+    try {
       await atualizarStatusAgendamentoServidor(id, novoStatus);
-      if (db && !id.startsWith('17') && isNaN(Number(id))) {
-        await updateDoc(doc(db, 'agendamentos', id), {
-          status: novoStatus
-        });
+    } catch {}
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'agendamentos', id), {
+          status: novoStatus,
+          statusLavagem: novoStatus,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch {
+        try {
+          await updateDoc(doc(db, 'agendamentos', id), {
+            status: novoStatus,
+            statusLavagem: novoStatus
+          });
+        } catch {
+          try {
+            const q = query(collection(db, 'agendamentos'), where('id', '==', id));
+            const snap = await getDocs(q);
+            snap.forEach(d => updateDoc(d.ref, { status: novoStatus, statusLavagem: novoStatus }).catch(() => {}));
+          } catch {}
+        }
       }
-    } catch (e) {
-      console.warn('Erro ao atualizar status do agendamento:', e);
     }
 
     mostrarToast(`Agendamento atualizado para "${novoStatus}"!`, 'sucesso');
@@ -1537,15 +1729,23 @@ export default function PainelLavaJato({
       return;
     }
 
+    const bannerId = `ban_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const novo: BannerPromocional = {
-      id: String(Date.now()),
+      id: bannerId,
       titulo: novoBannerTitulo.trim(),
       status: 'Ativo',
       imagem: novoBannerImg.trim() || 'https://images.unsplash.com/photo-1520340356584-f9917d1eea6f?w=600&auto=format&fit=crop&q=60',
       unidadeId: unidadeLogada
     };
 
-    setBanners([novo, ...banners]);
+    const listaAtualizada = [novo, ...banners.filter(b => b.id !== bannerId)];
+    setBanners(listaAtualizada);
+    try {
+      localStorage.setItem('hubwash_banners', JSON.stringify(listaAtualizada));
+      if (unidadeLogada) localStorage.setItem(`hubwash_banners_${unidadeLogada}`, JSON.stringify(listaAtualizada));
+      window.dispatchEvent(new CustomEvent('hubwash_banners_atualizados', { detail: listaAtualizada }));
+    } catch {}
+
     setNovoBannerTitulo('');
     setNovoBannerImg('');
     mostrarToast('Novo banner promocional publicado no App Cliente!', 'sucesso');
@@ -1553,7 +1753,13 @@ export default function PainelLavaJato({
     try {
       await salvarBannerServidor(novo);
       if (db) {
-        await addDoc(collection(db, 'banners'), { ...novo, unidadeId: unidadeLogada });
+        await setDoc(doc(db, 'banners', bannerId), {
+          ...novo,
+          id: bannerId,
+          unidadeId: unidadeLogada,
+          status: 'Ativo',
+          createdAt: new Date().toISOString()
+        });
       }
     } catch (err) {
       console.warn('Erro ao sincronizar banner:', err);
@@ -2429,15 +2635,9 @@ export default function PainelLavaJato({
                       <div className="flex flex-wrap items-center gap-2 self-end sm:self-auto">
                         <button
                           type="button"
-                          onClick={() => {
-                            setNovoClienteFila(ag.cliente);
-                            setNovoVeiculoFila(ag.veiculo);
-                            setNovoServicoFila(ag.servico);
-                            setAbaAtiva('fila');
-                            mostrarToast(`Dados de ${ag.cliente} carregados na Fila de Lavagem!`, 'info');
-                          }}
+                          onClick={() => puxarAgendamentoParaFila(ag)}
                           className="px-2.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition cursor-pointer flex items-center gap-1"
-                          title="Carregar na Fila de Lavagem"
+                          title="Inserir diretamente na Fila de Lavagem (Status: Espera)"
                         >
                           <Play size={13} />
                           <span>Puxar p/ Fila</span>
@@ -3567,14 +3767,27 @@ export default function PainelLavaJato({
                             onClick={async () => {
                               const novoStatus: 'Ativo' | 'Inativo' = b.status === 'Ativo' ? 'Inativo' : 'Ativo';
                               const atualizado = { ...b, status: novoStatus };
-                              setBanners(banners.map(item => item.id === b.id ? atualizado : item));
+                              const novaLista = banners.map(item => item.id === b.id ? atualizado : item);
+                              setBanners(novaLista);
+                              try {
+                                localStorage.setItem('hubwash_banners', JSON.stringify(novaLista));
+                                if (unidadeLogada) localStorage.setItem(`hubwash_banners_${unidadeLogada}`, JSON.stringify(novaLista));
+                                window.dispatchEvent(new CustomEvent('hubwash_banners_atualizados', { detail: novaLista }));
+                                window.dispatchEvent(new Event('hubwash_banners_atualizados'));
+                              } catch {}
                               mostrarToast(`Banner marcado como ${novoStatus}!`, 'info');
                               try {
                                 await salvarBannerServidor(atualizado);
-                                if (db && !b.id.startsWith('17') && isNaN(Number(b.id))) {
-                                  await updateDoc(doc(db, 'banners', b.id), { status: novoStatus });
-                                }
                               } catch {}
+                              if (db) {
+                                try {
+                                  await setDoc(doc(db, 'banners', b.id), { ...atualizado, updatedAt: new Date().toISOString() }, { merge: true });
+                                } catch {
+                                  try {
+                                    await updateDoc(doc(db, 'banners', b.id), { status: novoStatus });
+                                  } catch {}
+                                }
+                              }
                             }}
                             className="text-xs text-cyan-400 hover:underline cursor-pointer"
                           >

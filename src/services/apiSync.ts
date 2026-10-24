@@ -45,7 +45,7 @@ export interface AgendamentoSync {
   horario: string;
   veiculo: string;
   servico: string;
-  status: 'Pendente' | 'Confirmado' | 'Em Andamento' | 'Concluído' | 'Concluido' | 'Cancelado' | 'Em Atendimento' | 'Vistoriado';
+  status: 'Pendente' | 'Confirmado' | 'Em Andamento' | 'Concluído' | 'Concluido' | 'Cancelado' | 'Em Atendimento' | 'Vistoriado' | 'Espera' | 'Lavando' | 'Pronto' | 'Entregue';
   createdAt?: string;
 }
 

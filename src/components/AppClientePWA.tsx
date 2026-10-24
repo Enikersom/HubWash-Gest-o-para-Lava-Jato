@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Car,
   Calendar,
@@ -29,7 +29,10 @@ import {
   X,
   RefreshCw,
   Flame,
-  Tag
+  Tag,
+  Droplets,
+  Wrench,
+  Bell
 } from 'lucide-react';
 import { db, collection, addDoc, setDoc, onSnapshot, doc, deleteDoc, query, where, orderBy, getDocs } from '../firebase';
 import { 
@@ -81,6 +84,17 @@ export interface Agendamento {
   status: string;
 }
 
+export interface NotificacaoStatusServico {
+  id: string;
+  status: string;
+  titulo: string;
+  mensagem: string;
+  veiculo?: string;
+  servico?: string;
+  horario?: string;
+  timestamp: number;
+}
+
 interface AppClientePWAProps {
   unidadeNome?: string;
   onVoltarLogin: () => void;
@@ -117,6 +131,17 @@ export default function AppClientePWA({
 
   const [unidadeAtual, setUnidadeAtual] = useState<UnidadeLavaJato | null>(null);
   const [carregandoUnidade, setCarregandoUnidade] = useState(true);
+
+  // ID Padronizado da Unidade (calculado a partir de unidadeAtual ou fallback)
+  const unidadeIdNormalizada = useMemo(() => {
+    return (unidadeAtual?.id || unidadeNome || 'pitstop')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '') || 'pitstop';
+  }, [unidadeAtual, unidadeNome]);
 
   // Banco de clientes persistente amarrado às unidades
   const [bancoClientes, setBancoClientes] = useState<Cliente[]>(() => {
@@ -230,6 +255,62 @@ export default function AppClientePWA({
   }, [todosAgendamentos]);
 
   // ==========================================
+  // NOTIFICAÇÃO VISUAL TOAST DE STATUS AO VIVO
+  // ==========================================
+  const [notificacaoStatus, setNotificacaoStatus] = useState<NotificacaoStatusServico | null>(null);
+  const statusAnterioresAgendamentosRef = useRef<Map<string, string>>(new Map());
+
+  const dispararNotificacaoStatus = (novoStatus: string, agId?: string, veiculoNome?: string, servicoNome?: string) => {
+    const agCorrespondente = todosAgendamentos.find(a => a.id === agId);
+    const veiculoFinal = veiculoNome || agCorrespondente?.veiculo || usuarioLogado?.modelo || 'Seu Veículo';
+    const servicoFinal = servicoNome || agCorrespondente?.servico || 'Lavagem Automotiva';
+
+    let titulo = 'Status da Lavagem Atualizado';
+    let mensagem = `Seu serviço agora está como: ${novoStatus}`;
+
+    const s = (novoStatus || '').toLowerCase().trim();
+    if (s === 'espera') {
+      titulo = '🚗 Veículo na Fila de Lavagem';
+      mensagem = `${veiculoFinal} foi recebido no pátio e está na fila aguardando liberação do box.`;
+    } else if (s === 'lavando') {
+      titulo = '🚿 Lavagem Iniciada no Box!';
+      mensagem = `${veiculoFinal} entrou no box e está sendo lavado com produtos especializados.`;
+    } else if (s === 'pronto') {
+      titulo = '✨ Veículo Pronto para Retirada!';
+      mensagem = `${veiculoFinal} está pronto, brilhando e perfumado! Pode vir retirar na recepção.`;
+    } else if (s === 'concluido' || s === 'entregue') {
+      titulo = '🎉 Lavagem Finalizada & Entregue!';
+      mensagem = `Veículo entregue com sucesso! Obrigado pela preferência no ${unidadeAtual?.nomeFantasia || 'Lava Jato'}.`;
+    } else if (s === 'confirmado') {
+      titulo = '📅 Agendamento Confirmado!';
+      mensagem = `Seu agendamento para ${servicoFinal} foi confirmado pela equipe.`;
+    }
+
+    try {
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate([150, 80, 150]);
+      }
+    } catch {}
+
+    const novaNotif: NotificacaoStatusServico = {
+      id: `notif_${Date.now()}`,
+      status: novoStatus,
+      titulo,
+      mensagem,
+      veiculo: veiculoFinal,
+      servico: servicoFinal,
+      horario: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      timestamp: Date.now()
+    };
+
+    setNotificacaoStatus(novaNotif);
+
+    setTimeout(() => {
+      setNotificacaoStatus(atual => atual?.id === novaNotif.id ? null : atual);
+    }, 7000);
+  };
+
+  // ==========================================
   // BANNERS PROMOCIONAIS & CARROSSEL DO CLIENTE
   // ==========================================
   const [banners, setBanners] = useState<BannerPromocional[]>(() => {
@@ -271,22 +352,128 @@ export default function AppClientePWA({
     }
   ], []);
 
-  // Lista de banners ativos vinculados à unidade atual
+  // Ouvintes de eventos em tempo real para sincronização instantânea de banners e status de lavagem
+  useEffect(() => {
+    const handleBannersAtualizados = (e: any) => {
+      const novos = e.detail;
+      if (Array.isArray(novos)) {
+        setBanners(novos);
+      } else {
+        try {
+          const salvos = localStorage.getItem('hubwash_banners');
+          if (salvos) setBanners(JSON.parse(salvos));
+        } catch {}
+      }
+    };
+
+    const handleStatusLavagem = (e: any) => {
+      const { agendamentoId, cliente, status } = e.detail || {};
+      if (status) {
+        setTodosAgendamentos(prev => prev.map(ag => {
+          const bateId = agendamentoId && ag.id === agendamentoId;
+          const bateCli = cliente && ag.cliente && ag.cliente.toLowerCase().trim() === String(cliente).toLowerCase().trim();
+          if (bateId || bateCli) {
+            return { ...ag, status };
+          }
+          return ag;
+        }));
+
+        // Notifica visualmente no topo da tela do cliente
+        const bateClienteAtual = !usuarioLogado ? true : (
+          (agendamentoId && todosAgendamentos.some(a => a.id === agendamentoId && (
+            (usuarioLogado.email && a.email && a.email.toLowerCase().trim() === usuarioLogado.email.toLowerCase().trim()) ||
+            (usuarioLogado.nome && a.cliente && a.cliente.toLowerCase().trim() === usuarioLogado.nome.toLowerCase().trim())
+          ))) ||
+          (cliente && usuarioLogado.nome && usuarioLogado.nome.toLowerCase().trim() === String(cliente).toLowerCase().trim()) ||
+          (cliente && usuarioLogado.email && usuarioLogado.email.toLowerCase().trim() === String(cliente).toLowerCase().trim())
+        );
+
+        if (bateClienteAtual) {
+          dispararNotificacaoStatus(status, agendamentoId);
+        }
+      }
+    };
+
+    const handleAgendamentoAlterado = () => {
+      try {
+        const s = localStorage.getItem('hubwash_agendamentos_painel') || localStorage.getItem('hubwash_agendamentos_pwa');
+        if (s) {
+          const parsed = JSON.parse(s);
+          if (Array.isArray(parsed)) {
+            setTodosAgendamentos(prev => {
+              const mapa = new Map<string, Agendamento>();
+              prev.forEach(a => mapa.set(a.id, a));
+              parsed.forEach((a: any) => {
+                if (mapa.has(a.id)) {
+                  mapa.set(a.id, { ...mapa.get(a.id)!, ...a });
+                } else {
+                  mapa.set(a.id, a);
+                }
+              });
+              return Array.from(mapa.values());
+            });
+          }
+        }
+      } catch {}
+    };
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'hubwash_banners' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setBanners(parsed);
+        } catch {}
+      }
+      if ((e.key === 'hubwash_agendamentos_painel' || e.key === 'hubwash_agendamentos_pwa') && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setTodosAgendamentos(parsed);
+          }
+        } catch {}
+      }
+    };
+
+    window.addEventListener('hubwash_banners_atualizados', handleBannersAtualizados);
+    window.addEventListener('hubwash_status_lavagem_atualizado', handleStatusLavagem);
+    window.addEventListener('hubwash_agendamento_alterado', handleAgendamentoAlterado);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('hubwash_banners_atualizados', handleBannersAtualizados);
+      window.removeEventListener('hubwash_status_lavagem_atualizado', handleStatusLavagem);
+      window.removeEventListener('hubwash_agendamento_alterado', handleAgendamentoAlterado);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  // Lista de banners ativos vinculados à unidade atual com matching inteligente
   const bannersExibicao = useMemo(() => {
+    const normalizar = (s?: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const uIdNorm = normalizar(unidadeAtual?.id);
+    const uNomeNorm = normalizar(unidadeAtual?.nomeFantasia);
+    const uPadraoNorm = normalizar(unidadeIdNormalizada);
+
     const customAtivos = banners.filter(b => {
-      if (b.status !== 'Ativo') return false;
+      if (b.status && b.status !== 'Ativo') return false;
       if (!b.unidadeId) return true;
-      if (!unidadeAtual) return true;
-      const uId = unidadeAtual.id.toLowerCase();
-      const bUId = b.unidadeId.toLowerCase();
-      return bUId === uId || bUId.includes(uId) || uId.includes(bUId);
+      const bUId = normalizar(b.unidadeId);
+      if (!bUId) return true;
+      return (
+        bUId === uIdNorm ||
+        bUId === uNomeNorm ||
+        bUId === uPadraoNorm ||
+        (uIdNorm && bUId.includes(uIdNorm)) ||
+        (uIdNorm && uIdNorm.includes(bUId)) ||
+        (uNomeNorm && bUId.includes(uNomeNorm)) ||
+        (uNomeNorm && uNomeNorm.includes(bUId))
+      );
     });
 
     if (customAtivos.length > 0) {
       return customAtivos;
     }
     return bannersPadrao;
-  }, [banners, bannersPadrao, unidadeAtual]);
+  }, [banners, bannersPadrao, unidadeAtual, unidadeIdNormalizada]);
 
   // Transição automática a cada 5 segundos
   useEffect(() => {
@@ -459,15 +646,6 @@ export default function AppClientePWA({
 
 
 
-  // ID Padronizado da Unidade
-  const unidadeIdNormalizada = (unidadeAtual?.id || unidadeNome || 'pitstop')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '') || 'pitstop';
-
   // ➡️ SINCRONIZAÇÃO EM TEMPO REAL COM SERVIDOR CENTRAL E FIREBASE (MOBILE <-> NOTEBOOK)
   useEffect(() => {
     // 1. Polling contínuo de sincronização com o servidor central (a cada 3s)
@@ -576,15 +754,22 @@ export default function AppClientePWA({
           qBanners,
           (snapshot: any) => {
             const bannersFirestore: BannerPromocional[] = [];
+            const normalizar = (s?: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const uIdNorm = normalizar(unidadeAtual?.id);
+            const uNomeNorm = normalizar(unidadeAtual?.nomeFantasia);
+            const uPadraoNorm = normalizar(unidadeIdNormalizada);
+
             snapshot.forEach((docSnap: any) => {
               const data = docSnap.data();
-              const bUnidade = String(data.unidadeId || '').toLowerCase();
-              const pertence = !bUnidade || 
-                bUnidade === unidadeIdNormalizada || 
-                bUnidade.includes(unidadeIdNormalizada) || 
-                unidadeIdNormalizada.includes(bUnidade) ||
-                (unidadeAtual && bUnidade.includes(unidadeAtual.id.toLowerCase())) ||
-                (unidadeAtual && bUnidade.includes(unidadeAtual.nomeFantasia.toLowerCase()));
+              const bUId = normalizar(data.unidadeId);
+              const pertence = !bUId || 
+                bUId === uIdNorm || 
+                bUId === uNomeNorm || 
+                bUId === uPadraoNorm || 
+                (uIdNorm && bUId.includes(uIdNorm)) ||
+                (uIdNorm && uIdNorm.includes(bUId)) ||
+                (uNomeNorm && bUId.includes(uNomeNorm)) ||
+                (uNomeNorm && uNomeNorm.includes(bUId));
 
               if (pertence) {
                 bannersFirestore.push({
@@ -600,9 +785,10 @@ export default function AppClientePWA({
               }
             });
 
-            if (bannersFirestore.length > 0) {
-              setBanners(bannersFirestore);
-            }
+            setBanners(bannersFirestore);
+            try {
+              localStorage.setItem('hubwash_banners', JSON.stringify(bannersFirestore));
+            } catch {}
           },
           (error: any) => {
             console.warn('Firestore onSnapshot banners (AppCliente):', error);
@@ -675,6 +861,22 @@ export default function AppClientePWA({
                   status: data.status || 'Pendente'
                 });
               }
+            });
+
+            // Dispara notificação no topo se o status mudou na nuvem Firestore
+            listaFirestore.forEach((item) => {
+              const statusAnterior = statusAnterioresAgendamentosRef.current.get(item.id);
+              if (statusAnterior && statusAnterior !== item.status) {
+                const pertenceAoUsuario = !usuarioLogado ? true : (
+                  (usuarioLogado.email && item.email && usuarioLogado.email.toLowerCase().trim() === item.email.toLowerCase().trim()) ||
+                  (usuarioLogado.contato && item.telefone && usuarioLogado.contato.replace(/\D/g, '') === item.telefone.replace(/\D/g, '')) ||
+                  (usuarioLogado.nome && item.cliente && usuarioLogado.nome.toLowerCase().trim() === item.cliente.toLowerCase().trim())
+                );
+                if (pertenceAoUsuario) {
+                  dispararNotificacaoStatus(item.status, item.id, item.veiculo, item.servico);
+                }
+              }
+              statusAnterioresAgendamentosRef.current.set(item.id, item.status);
             });
 
             setTodosAgendamentos((prev) => {
@@ -1223,6 +1425,64 @@ export default function AppClientePWA({
     return Array.from(unicos.values());
   }, [todosAgendamentos, usuarioLogado, unidadeAtual?.id, unidadeIdNormalizada]);
 
+  // Retorna a etapa numérica (1 a 4) do processo de lavagem
+  const getEtapaLavagem = (status?: string) => {
+    const s = (status || '').toLowerCase().trim();
+    if (s === 'concluido' || s === 'finalizado' || s === 'entregue') return 4;
+    if (s === 'pronto') return 4;
+    if (s === 'lavando' || s === 'em lavagem' || s === 'em andamento') return 3;
+    if (s === 'espera' || s === 'na fila' || s === 'fila') return 2;
+    return 1; // 'pendente', 'confirmado'
+  };
+
+  // Agendamento prioritário em andamento para o painel de rastreamento ao vivo
+  const agendamentoAtivo = useMemo(() => {
+    if (!meusAgendamentos || meusAgendamentos.length === 0) return null;
+    const pronto = meusAgendamentos.find(a => a.status === 'Pronto');
+    if (pronto) return pronto;
+    const lavando = meusAgendamentos.find(a => a.status === 'Lavando');
+    if (lavando) return lavando;
+    const espera = meusAgendamentos.find(a => a.status === 'Espera');
+    if (espera) return espera;
+    const pendentes = meusAgendamentos.filter(a => a.status !== 'Cancelado');
+    return pendentes[0] || null;
+  }, [meusAgendamentos]);
+
+  const etapasLavagemConfig = [
+    {
+      passo: 1,
+      titulo: 'Agendado',
+      subtitulo: 'Horário Reservado',
+      detalhe: 'Aguardando sua chegada ao lava jato.',
+      icone: CalendarCheck,
+      corAtiva: 'text-blue-400 bg-blue-500/20 border-blue-500/40'
+    },
+    {
+      passo: 2,
+      titulo: 'Na Fila',
+      subtitulo: 'No Pátio (Espera)',
+      detalhe: 'Veículo no pátio aguardando liberação do box.',
+      icone: Car,
+      corAtiva: 'text-amber-400 bg-amber-500/20 border-amber-500/40 shadow-amber-500/10'
+    },
+    {
+      passo: 3,
+      titulo: 'Lavando',
+      subtitulo: 'No Box em Lavagem',
+      detalhe: 'Lavagem em andamento com produtos especiais.',
+      icone: Droplets,
+      corAtiva: 'text-cyan-400 bg-cyan-500/20 border-cyan-500/40 animate-pulse shadow-cyan-500/20'
+    },
+    {
+      passo: 4,
+      titulo: 'Pronto!',
+      subtitulo: 'Pode Retirar',
+      detalhe: 'Veículo 100% pronto, brilhando e perfumado!',
+      icone: Sparkles,
+      corAtiva: 'text-emerald-400 bg-emerald-500/20 border-emerald-500/40 shadow-emerald-500/20'
+    }
+  ];
+
   const horariosDisponiveis = [
     '07:00', '07:30', '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
     '13:00', '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30'
@@ -1282,6 +1542,106 @@ export default function AppClientePWA({
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-0 sm:p-4 font-sans antialiased">
       
+      {/* NOTIFICAÇÃO VISUAL NO TOPO AO MUDAR O STATUS DA LAVAGEM */}
+      {notificacaoStatus && (
+        <div className="fixed top-3 inset-x-3 sm:inset-x-auto sm:top-5 sm:max-w-md w-auto sm:w-full z-50 animate-bounce-in">
+          <div
+            onClick={() => {
+              if (usuarioLogado) setTelaAtiva('home');
+            }}
+            className={`p-3.5 rounded-2xl shadow-2xl border backdrop-blur-xl transition-all duration-300 relative overflow-hidden flex flex-col gap-2.5 cursor-pointer ${
+              notificacaoStatus.status === 'Pronto'
+                ? 'bg-emerald-950/95 border-emerald-500/50 shadow-emerald-500/20 text-emerald-100'
+                : notificacaoStatus.status === 'Lavando'
+                ? 'bg-cyan-950/95 border-cyan-500/50 shadow-cyan-500/20 text-cyan-100'
+                : notificacaoStatus.status === 'Espera'
+                ? 'bg-amber-950/95 border-amber-500/50 shadow-amber-500/20 text-amber-100'
+                : notificacaoStatus.status === 'Concluido' || notificacaoStatus.status === 'Entregue'
+                ? 'bg-purple-950/95 border-purple-500/50 shadow-purple-500/20 text-purple-100'
+                : 'bg-blue-950/95 border-blue-500/50 shadow-blue-500/20 text-blue-100'
+            }`}
+          >
+            {/* Barra de progresso do timer da notificação */}
+            <div className="absolute top-0 left-0 right-0 h-1 bg-white/10 overflow-hidden">
+              <div
+                className={`h-full animate-toast-progress ${
+                  notificacaoStatus.status === 'Pronto'
+                    ? 'bg-emerald-400'
+                    : notificacaoStatus.status === 'Lavando'
+                    ? 'bg-cyan-400'
+                    : notificacaoStatus.status === 'Espera'
+                    ? 'bg-amber-400'
+                    : 'bg-blue-400'
+                }`}
+              />
+            </div>
+
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0">
+                <div
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-md ${
+                    notificacaoStatus.status === 'Pronto'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 ring-2 ring-emerald-500/20'
+                      : notificacaoStatus.status === 'Lavando'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 ring-2 ring-cyan-500/20 animate-pulse'
+                      : notificacaoStatus.status === 'Espera'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 ring-2 ring-amber-500/20'
+                      : 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                  }`}
+                >
+                  {notificacaoStatus.status === 'Pronto' ? (
+                    <Sparkles size={18} />
+                  ) : notificacaoStatus.status === 'Lavando' ? (
+                    <Droplets size={18} />
+                  ) : notificacaoStatus.status === 'Espera' ? (
+                    <Car size={18} />
+                  ) : (
+                    <Bell size={18} />
+                  )}
+                </div>
+
+                <div className="space-y-0.5 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-slate-300/80">
+                      Lava Jato • {notificacaoStatus.horario}
+                    </span>
+                    <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[9px] font-extrabold bg-white/10 uppercase">
+                      Ao Vivo
+                    </span>
+                  </div>
+                  <h4 className="text-xs font-black text-white leading-tight">
+                    {notificacaoStatus.titulo}
+                  </h4>
+                  <p className="text-[11px] text-slate-200/90 leading-snug">
+                    {notificacaoStatus.mensagem}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setNotificacaoStatus(null);
+                }}
+                className="text-white/60 hover:text-white p-1 rounded-lg hover:bg-white/10 transition cursor-pointer shrink-0"
+                title="Fechar notificação"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            {/* Rodapé do Toast com veículo e serviço */}
+            {notificacaoStatus.veiculo && (
+              <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[10px] text-slate-300/90 font-medium">
+                <span className="truncate max-w-[190px]">🚗 {notificacaoStatus.veiculo}</span>
+                <span className="font-semibold text-white truncate max-w-[150px]">{notificacaoStatus.servico}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* TOAST DE FEEDBACK VISUAL SEGURO */}
       {toast && (
         <div className="fixed top-5 z-50 px-4 animate-fade-in">
@@ -1925,6 +2285,183 @@ export default function AppClientePWA({
                 </span>
               </div>
 
+              {/* ========================================== */}
+              {/* STATUS DA LAVAGEM EM TEMPO REAL (CLIENTE) */}
+              {/* ========================================== */}
+              {agendamentoAtivo && (() => {
+                const etapaAtiva = getEtapaLavagem(agendamentoAtivo.status);
+                const isFinalizado = agendamentoAtivo.status === 'Concluido' || agendamentoAtivo.status === 'Entregue';
+                const isPronto = agendamentoAtivo.status === 'Pronto';
+                const isLavando = agendamentoAtivo.status === 'Lavando';
+                const isEspera = agendamentoAtivo.status === 'Espera';
+
+                return (
+                  <div className="bg-gradient-to-b from-slate-900/95 to-slate-950 border border-slate-800 rounded-2xl p-4 shadow-2xl space-y-3.5 relative overflow-hidden">
+                    {/* Glow de fundo contextual de acordo com a etapa */}
+                    <div className={`absolute -top-10 -right-10 w-36 h-36 rounded-full blur-3xl pointer-events-none opacity-25 transition-all duration-500 ${
+                      isPronto
+                        ? 'bg-emerald-500'
+                        : isLavando
+                        ? 'bg-cyan-500'
+                        : isEspera
+                        ? 'bg-amber-500'
+                        : isFinalizado
+                        ? 'bg-purple-500'
+                        : 'bg-blue-500'
+                    }`} />
+
+                    {/* Cabeçalho com indicador ao vivo */}
+                    <div className="flex items-center justify-between relative z-10">
+                      <div className="flex items-center gap-2">
+                        <span className="relative flex h-2.5 w-2.5">
+                          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                            isPronto ? 'bg-emerald-400' : isLavando ? 'bg-cyan-400' : isEspera ? 'bg-amber-400' : 'bg-blue-400'
+                          }`}></span>
+                          <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                            isPronto ? 'bg-emerald-500' : isLavando ? 'bg-cyan-500' : isEspera ? 'bg-amber-500' : 'bg-blue-500'
+                          }`}></span>
+                        </span>
+                        <h4 className="text-xs font-bold text-white tracking-wide">
+                          Acompanhamento da Lavagem ao Vivo
+                        </h4>
+                      </div>
+
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border transition-all ${
+                        isPronto
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40 shadow-sm shadow-emerald-500/20'
+                          : isLavando
+                          ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/40 animate-pulse'
+                          : isEspera
+                          ? 'bg-amber-500/10 text-amber-300 border-amber-500/40'
+                          : isFinalizado
+                          ? 'bg-purple-500/10 text-purple-300 border-purple-500/40'
+                          : 'bg-blue-500/10 text-blue-300 border-blue-500/40'
+                      }`}>
+                        {isEspera ? '🚗 Na Fila (Pátio)' :
+                         isLavando ? '🚿 Lavando no Box' :
+                         isPronto ? '✨ Pronto p/ Retirada!' :
+                         isFinalizado ? '🎉 Concluído & Entregue' : '📅 Agendado'}
+                      </span>
+                    </div>
+
+                    {/* Dados do Veículo e Serviço */}
+                    <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 flex items-center justify-between relative z-10">
+                      <div className="space-y-0.5">
+                        <p className="text-xs font-bold text-white flex items-center gap-1.5">
+                          <Car size={14} className="text-cyan-400" />
+                          <span>{agendamentoAtivo.veiculo}</span>
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          Serviço: <strong className="text-slate-200">{agendamentoAtivo.servico}</strong>
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] text-slate-500">Horário</p>
+                        <p className="text-xs font-mono font-bold text-cyan-400">{agendamentoAtivo.horario}</p>
+                      </div>
+                    </div>
+
+                    {/* Linha do Tempo Visual das 4 Etapas */}
+                    <div className="pt-1.5 pb-1 relative z-10">
+                      <div className="grid grid-cols-4 gap-1 relative">
+                        {/* Linha de fundo cinza */}
+                        <div className="absolute top-4 left-6 right-6 h-0.5 bg-slate-800 -z-0" />
+                        {/* Linha colorida de progresso */}
+                        <div
+                          className="absolute top-4 left-6 h-0.5 bg-gradient-to-r from-blue-500 via-cyan-400 to-emerald-400 transition-all duration-700 -z-0"
+                          style={{
+                            width: `${Math.max(0, Math.min(100, ((etapaAtiva - 1) / 3) * 88))}%`
+                          }}
+                        />
+
+                        {etapasLavagemConfig.map((etp) => {
+                          const isPassada = etapaAtiva > etp.passo;
+                          const isAtual = etapaAtiva === etp.passo;
+                          const Icone = etp.icone;
+
+                          return (
+                            <div key={etp.passo} className="flex flex-col items-center text-center relative z-10">
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center border text-xs font-bold transition-all duration-300 shadow-md ${
+                                isPassada
+                                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-emerald-500/10'
+                                  : isAtual
+                                  ? etp.corAtiva
+                                  : 'bg-slate-900 text-slate-600 border-slate-800'
+                              }`}>
+                                {isPassada ? <CheckCircle2 size={16} /> : <Icone size={14} />}
+                              </div>
+                              <span className={`mt-1.5 text-[10px] font-bold leading-tight ${
+                                isAtual ? 'text-white' : isPassada ? 'text-emerald-400' : 'text-slate-600'
+                              }`}>
+                                {etp.titulo}
+                              </span>
+                              <span className="text-[8px] text-slate-500 hidden sm:block">
+                                {etp.subtitulo}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Mensagem Contextual Explicativa */}
+                    <div className={`p-2.5 rounded-xl border text-[11px] leading-relaxed relative z-10 flex items-start gap-2.5 ${
+                      isPronto
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                        : isLavando
+                        ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300'
+                        : isEspera
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                        : isFinalizado
+                        ? 'bg-purple-500/10 border-purple-500/30 text-purple-300'
+                        : 'bg-slate-900/80 border-slate-800 text-slate-400'
+                    }`}>
+                      {isPronto ? (
+                        <>
+                          <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                          <div>
+                            <strong className="block text-emerald-200">Veículo Pronto para Retirada!</strong>
+                            Seu carro está pronto, higienizado, perfumado e brilhando. Já pode buscá-lo no {unidadeAtual.nomeFantasia}!
+                          </div>
+                        </>
+                      ) : isLavando ? (
+                        <>
+                          <Droplets className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5 animate-bounce" />
+                          <div>
+                            <strong className="block text-cyan-200">Veículo no Box em Lavagem!</strong>
+                            Nossa equipe está lavando seu veículo com produtos especializados. O status mudará para "Pronto" assim que finalizarmos.
+                          </div>
+                        </>
+                      ) : isEspera ? (
+                        <>
+                          <Car className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                          <div>
+                            <strong className="block text-amber-200">Veículo na Fila de Lavagem (Pátio)</strong>
+                            Seu veículo já foi recepcionado no pátio e está na fila aguardando liberação do box de lavagem.
+                          </div>
+                        </>
+                      ) : isFinalizado ? (
+                        <>
+                          <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                          <div>
+                            <strong className="block text-purple-200">Lavagem Concluída & Entregue!</strong>
+                            Agradecemos pela preferência no {unidadeAtual.nomeFantasia}. Seus pontos de fidelidade foram registrados!
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <Clock className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                          <div>
+                            <strong className="block text-blue-200">Agendamento Confirmado</strong>
+                            Aguardando sua chegada ao lava-jato no horário agendado ({agendamentoAtivo.horario}).
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Cartão de Fidelidade Resumo */}
               <div
                 onClick={() => setTelaAtiva('fidelidade')}
@@ -2032,35 +2569,84 @@ export default function AppClientePWA({
                     Você ainda não possui agendamentos no {unidadeAtual.nomeFantasia}.
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {meusAgendamentos.map((ag) => (
-                      <div
-                        key={ag.id}
-                        className="bg-slate-950/80 border border-slate-800/90 rounded-xl p-3 flex items-center justify-between text-xs"
-                      >
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-white">{ag.servico}</span>
-                            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-blue-500/10 border border-blue-500/30 text-blue-400">
-                              {ag.status}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-400">
-                            📅 {ag.data} às <strong className="text-white">{ag.horario}</strong>
-                          </p>
-                          <p className="text-[10px] text-slate-500">{ag.veiculo}</p>
-                        </div>
+                  <div className="space-y-2.5">
+                    {meusAgendamentos.map((ag) => {
+                      const etp = getEtapaLavagem(ag.status);
+                      const isPronto = ag.status === 'Pronto';
+                      const isLavando = ag.status === 'Lavando';
+                      const isEspera = ag.status === 'Espera';
+                      const isConcluido = ag.status === 'Concluido' || ag.status === 'Entregue';
 
-                        <button
-                          type="button"
-                          onClick={() => setAgendamentoParaCancelar(ag.id)}
-                          className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-rose-500/10 transition cursor-pointer"
-                          title="Cancelar Meu Agendamento"
+                      return (
+                        <div
+                          key={ag.id}
+                          className="bg-slate-950/80 border border-slate-800/90 rounded-2xl p-3.5 space-y-3 text-xs shadow-lg transition-all"
                         >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    ))}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-white text-xs">{ag.servico}</span>
+                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold border ${
+                                  isPronto
+                                    ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40 shadow-sm shadow-emerald-500/20'
+                                    : isLavando
+                                    ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/40 animate-pulse'
+                                    : isEspera
+                                    ? 'bg-amber-500/10 text-amber-300 border-amber-500/40'
+                                    : isConcluido
+                                    ? 'bg-purple-500/10 text-purple-300 border-purple-500/40'
+                                    : 'bg-blue-500/10 text-blue-400 border-blue-500/30'
+                                }`}>
+                                  {isEspera ? '🚗 Na Fila (Pátio)' :
+                                   isLavando ? '🚿 Lavando no Box' :
+                                   isPronto ? '✨ Pronto p/ Retirada!' :
+                                   isConcluido ? 'Finalizado' : ag.status}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-400">
+                                📅 {ag.data} às <strong className="text-white">{ag.horario}</strong>
+                              </p>
+                              <p className="text-[10px] text-slate-400 font-medium">{ag.veiculo}</p>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => setAgendamentoParaCancelar(ag.id)}
+                              className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-rose-500/10 transition cursor-pointer"
+                              title="Cancelar Meu Agendamento"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+
+                          {/* Mini-stepper de progresso em tempo real */}
+                          <div className="pt-2 border-t border-slate-900 grid grid-cols-4 gap-1 text-center">
+                            {etapasLavagemConfig.map((item) => {
+                              const completa = etp > item.passo || (etp === 4 && item.passo === 4 && isConcluido);
+                              const atual = etp === item.passo && !isConcluido;
+                              return (
+                                <div key={item.passo} className="flex flex-col items-center">
+                                  <div className={`w-5 h-5 rounded-full text-[9px] font-bold flex items-center justify-center transition-all ${
+                                    completa
+                                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                                      : atual
+                                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/60 ring-2 ring-cyan-500/20'
+                                      : 'bg-slate-900 text-slate-600 border border-slate-800'
+                                  }`}>
+                                    {completa ? '✓' : item.passo}
+                                  </div>
+                                  <span className={`text-[8.5px] mt-0.5 leading-tight ${
+                                    atual ? 'text-cyan-300 font-bold' : completa ? 'text-emerald-400' : 'text-slate-600'
+                                  }`}>
+                                    {item.titulo}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
