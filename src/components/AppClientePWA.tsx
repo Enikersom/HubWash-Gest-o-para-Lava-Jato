@@ -44,6 +44,7 @@ import {
   isApiServidorDisponivel
 } from '../services/apiSync';
 import { BannerPromocional, ServicoLavaJato } from '../types';
+import { formatarCelular, formatarCEP } from '../utils/formatters';
 
 export interface UnidadeLavaJato {
   id: string;
@@ -1857,23 +1858,41 @@ export default function AppClientePWA({
                   <div className="space-y-1">
                     <label className="text-slate-400">Contato / WhatsApp</label>
                     <input
-                      type="text"
-                      autoComplete="off"
+                      type="tel"
+                      autoComplete="tel"
+                      maxLength={15}
                       value={cadContato}
-                      onChange={e => setCadContato(e.target.value)}
+                      onChange={e => setCadContato(formatarCelular(e.target.value))}
                       placeholder="(11) 98888-7777"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500 font-mono text-xs"
                     />
                   </div>
                   <div className="space-y-1">
                     <label className="text-slate-400">CEP</label>
                     <input
                       type="text"
-                      autoComplete="off"
+                      autoComplete="postal-code"
+                      maxLength={9}
                       value={cadCep}
-                      onChange={e => setCadCep(e.target.value)}
+                      onChange={async (e) => {
+                        const formatado = formatarCEP(e.target.value);
+                        setCadCep(formatado);
+                        const rawCep = e.target.value.replace(/\D/g, '');
+                        if (rawCep.length === 8) {
+                          try {
+                            const res = await fetch(`https://viacep.com.br/ws/${rawCep}/json/`);
+                            const data = await res.json();
+                            if (!data.erro) {
+                              if (data.localidade) setCadCidade(data.localidade);
+                              if (data.bairro) setCadBairro(data.bairro);
+                              if (data.uf) setCadEstado(data.uf);
+                              mostrarToast(`Endereço localizado: ${data.localidade} - ${data.uf}`, 'info');
+                            }
+                          } catch {}
+                        }
+                      }}
                       placeholder="01001-000"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500 font-mono text-xs"
                     />
                   </div>
                 </div>

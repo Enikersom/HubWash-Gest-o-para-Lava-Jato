@@ -83,6 +83,7 @@ import {
 } from '../types';
 import RelatorioFinanceiro from './RelatorioFinanceiro';
 import SistemaChecklist from './SistemaChecklist';
+import { formatarCelular, formatarCEP } from '../utils/formatters';
 
 interface PainelLavaJatoProps {
   unidadeNome?: string;
@@ -102,6 +103,29 @@ export default function PainelLavaJato({
   // CONTROLADORES DE CORES PARA PERSONALIZAÇÃO DO APP
   const [corPrimaria, setCorPrimaria] = useState<'blue' | 'indigo' | 'emerald' | 'cyan' | 'violet' | 'amber'>('blue');
   const [nomeLavaJato, setNomeLavaJato] = useState(unidadeNome);
+  const [contatoLavaJato, setContatoLavaJato] = useState(() => {
+    try {
+      const salvos = localStorage.getItem('hubwash_lava_jatos');
+      if (salvos) {
+        const lista = JSON.parse(salvos);
+        const u = lista.find((x: any) => String(x.id).toLowerCase() === String(unidadeNome).toLowerCase() || String(x.nomeFantasia).toLowerCase() === String(unidadeNome).toLowerCase());
+        if (u && u.contato) return u.contato;
+      }
+    } catch {}
+    return '';
+  });
+  const [cepLavaJato, setCepLavaJato] = useState('');
+  const [enderecoLavaJato, setEnderecoLavaJato] = useState(() => {
+    try {
+      const salvos = localStorage.getItem('hubwash_lava_jatos');
+      if (salvos) {
+        const lista = JSON.parse(salvos);
+        const u = lista.find((x: any) => String(x.id).toLowerCase() === String(unidadeNome).toLowerCase() || String(x.nomeFantasia).toLowerCase() === String(unidadeNome).toLowerCase());
+        if (u && u.endereco) return u.endereco;
+      }
+    } catch {}
+    return '';
+  });
 
   // ESTADO DE FEEDBACK (TOAST & MODAL DE CONFIRMAÇÃO DE EXCLUSÃO)
   const [toast, setToast] = useState<{ mensagem: string; tipo: 'sucesso' | 'erro' | 'info' } | null>(null);
@@ -2518,11 +2542,12 @@ export default function PainelLavaJato({
                   <div>
                     <label className="block text-slate-400 font-medium mb-1">WhatsApp / Telefone</label>
                     <input
-                      type="text"
+                      type="tel"
+                      maxLength={15}
                       value={novoAgendTel}
-                      onChange={(e) => setNovoAgendTel(e.target.value)}
+                      onChange={(e) => setNovoAgendTel(formatarCelular(e.target.value))}
                       placeholder="(11) 98888-7777"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500 font-mono text-xs"
                     />
                   </div>
 
@@ -2628,7 +2653,7 @@ export default function PainelLavaJato({
                           {ag.veiculo} • <strong className="text-cyan-400">{ag.servico}</strong>
                         </p>
                         <p className="text-[11px] text-slate-500">
-                          Horário: <span className="text-slate-300 font-semibold">{ag.data} às {ag.horario}</span> • Tel: {ag.telefone}
+                          Horário: <span className="text-slate-300 font-semibold">{ag.data} às {ag.horario}</span> • Tel: <span className="font-mono text-slate-300 font-medium">{ag.telefone ? formatarCelular(ag.telefone) : 'Não informado'}</span>
                         </p>
                       </div>
 
@@ -3143,11 +3168,12 @@ export default function PainelLavaJato({
                   <div>
                     <label className="block text-slate-400 font-medium mb-1">WhatsApp / Telefone</label>
                     <input
-                      type="text"
+                      type="tel"
+                      maxLength={15}
                       value={novoCliTel}
-                      onChange={(e) => setNovoCliTel(e.target.value)}
+                      onChange={(e) => setNovoCliTel(formatarCelular(e.target.value))}
                       placeholder="(11) 98888-9999"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500 font-mono text-xs"
                     />
                   </div>
 
@@ -3208,7 +3234,7 @@ export default function PainelLavaJato({
                             <div>
                               <h4 className="text-sm font-bold text-white">{c.nome}</h4>
                               <p className="text-xs text-cyan-400 font-mono">{c.email || 'sem e-mail'}</p>
-                              <p className="text-xs text-slate-400">{c.telefone} • {c.veiculoPrincipal}</p>
+                              <p className="text-xs text-slate-400"><span className="font-mono text-slate-300">{c.telefone ? formatarCelular(c.telefone) : 'Sem telefone'}</span> • {c.veiculoPrincipal}</p>
                             </div>
 
                             <button
@@ -3330,11 +3356,12 @@ export default function PainelLavaJato({
                     <div>
                       <label className="block text-slate-400 font-medium mb-1">Telefone</label>
                       <input
-                        type="text"
+                        type="tel"
+                        maxLength={15}
                         value={novoFuncTel}
-                        onChange={(e) => setNovoFuncTel(e.target.value)}
+                        onChange={(e) => setNovoFuncTel(formatarCelular(e.target.value))}
                         placeholder="(11) 99999-0000"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500 font-mono text-xs"
                       />
                     </div>
                   </div>
@@ -3831,6 +3858,58 @@ export default function PainelLavaJato({
                   />
                 </div>
 
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-300 font-medium mb-1">WhatsApp / Telefone da Unidade</label>
+                    <input
+                      type="tel"
+                      maxLength={15}
+                      value={contatoLavaJato}
+                      onChange={(e) => setContatoLavaJato(formatarCelular(e.target.value))}
+                      placeholder="(11) 98888-7777"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500 font-mono text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-medium mb-1">CEP</label>
+                    <input
+                      type="text"
+                      maxLength={9}
+                      value={cepLavaJato}
+                      onChange={async (e) => {
+                        const fmt = formatarCEP(e.target.value);
+                        setCepLavaJato(fmt);
+                        const raw = e.target.value.replace(/\D/g, '');
+                        if (raw.length === 8) {
+                          try {
+                            const res = await fetch(`https://viacep.com.br/ws/${raw}/json/`);
+                            const data = await res.json();
+                            if (!data.erro) {
+                              const autoEnd = `${data.logradouro ? data.logradouro + ', ' : ''}${data.bairro ? data.bairro + ', ' : ''}${data.localidade || ''} - ${data.uf || ''}`;
+                              if (autoEnd) setEnderecoLavaJato(autoEnd);
+                              mostrarToast(`Endereço localizado: ${data.localidade} - ${data.uf}`, 'info');
+                            }
+                          } catch {}
+                        }
+                      }}
+                      placeholder="00000-000"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500 font-mono text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1">Endereço da Unidade</label>
+                  <input
+                    type="text"
+                    value={enderecoLavaJato}
+                    onChange={(e) => setEnderecoLavaJato(e.target.value)}
+                    placeholder="Av. Principal, 100 - Bairro"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500 text-xs"
+                  />
+                </div>
+
                 {/* Paleta de Cores do Sistema */}
                 <div className="space-y-2">
                   <label className="block text-slate-300 font-medium flex items-center gap-1.5">
@@ -3868,11 +3947,36 @@ export default function PainelLavaJato({
 
                 <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
                   <p className="text-slate-400 text-[11px]">
-                    As alterações são salvas automaticamente na sessão atual.
+                    As alterações são salvas e sincronizadas automaticamente.
                   </p>
                   <button
                     type="button"
-                    onClick={() => mostrarToast('Configurações salvas com sucesso!', 'sucesso')}
+                    onClick={async () => {
+                      try {
+                        const salvos = localStorage.getItem('hubwash_lava_jatos');
+                        if (salvos) {
+                          const lista = JSON.parse(salvos);
+                          const idx = lista.findIndex((x: any) => String(x.id).toLowerCase() === String(unidadeNome).toLowerCase() || String(x.nomeFantasia).toLowerCase() === String(unidadeNome).toLowerCase());
+                          if (idx !== -1) {
+                            lista[idx] = {
+                              ...lista[idx],
+                              nomeFantasia: nomeLavaJato,
+                              contato: contatoLavaJato,
+                              endereco: enderecoLavaJato
+                            };
+                            localStorage.setItem('hubwash_lava_jatos', JSON.stringify(lista));
+                            if (db) {
+                              await updateDoc(doc(db, 'unidades', lista[idx].id), {
+                                nomeFantasia: nomeLavaJato,
+                                contato: contatoLavaJato,
+                                endereco: enderecoLavaJato
+                              }).catch(() => {});
+                            }
+                          }
+                        }
+                      } catch {}
+                      mostrarToast('Configurações da unidade salvas com sucesso!', 'sucesso');
+                    }}
                     className={`px-5 py-2 ${temaClasses.bg} text-white font-bold rounded-xl shadow-lg transition cursor-pointer`}
                   >
                     Salvar Alterações

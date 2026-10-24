@@ -46,6 +46,7 @@ import {
   atualizarStatusUnidadeServidor,
   excluirUnidadeServidor
 } from '../services/apiSync';
+import { formatarCelular, formatarCEP, formatarCpfCnpj } from '../utils/formatters';
 
 interface AdminMasterProps {
   onLogout?: () => void;
@@ -93,6 +94,7 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
   const [nomeProprietario, setNomeProprietario] = useState('');
   const [razaoSocial, setRazaoSocial] = useState('');
   const [cnpj, setCnpj] = useState('');
+  const [cep, setCep] = useState('');
   const [endereco, setEndereco] = useState('');
   const [contato, setContato] = useState('');
   const [senhaProvisoria, setSenhaProvisoria] = useState('');
@@ -319,13 +321,15 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
     const dataExpiracao = new Date();
     dataExpiracao.setDate(hoje.getDate() + 30); // 30 dias de teste/ativação garantida
 
+    const enderecoFormatado = cep ? `CEP: ${cep} - ${endereco.trim()}` : endereco.trim();
+
     const novoLavaJato: LavaJato = {
       id: slug,
       nomeFantasia: nomeFantasia.trim(),
       nomeProprietario: nomeProprietario.trim(),
       razaoSocial: razaoSocial.trim() || nomeFantasia.trim(),
       cnpj: cnpj.trim(),
-      endereco: endereco.trim() || 'Não informado',
+      endereco: enderecoFormatado || 'Não informado',
       contato: contato.trim() || 'Não informado',
       senhaProvisoria: senhaProvisoria.trim(),
       valorPlano: parseFloat(valorPlano) || 0,
@@ -374,6 +378,7 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
     setNomeProprietario('');
     setRazaoSocial('');
     setCnpj('');
+    setCep('');
     setEndereco('');
     setContato('');
     setSenhaProvisoria('');
@@ -845,25 +850,58 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                   <input 
                     type="text" 
                     value={cnpj} 
-                    onChange={(e) => setCnpj(e.target.value)} 
+                    maxLength={18}
+                    onChange={(e) => setCnpj(formatarCpfCnpj(e.target.value))} 
                     placeholder="00.000.000/0001-00" 
                     required
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" 
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono text-xs" 
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="block text-slate-300 mb-1">Endereço Completo</label>
-                <div className="relative">
-                  <MapPin className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-                  <input 
-                    type="text" 
-                    value={endereco} 
-                    onChange={(e) => setEndereco(e.target.value)} 
-                    placeholder="Av. Central, 1500 - Centro" 
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" 
-                  />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="sm:col-span-1">
+                  <label className="block text-slate-300 mb-1">CEP</label>
+                  <div className="relative">
+                    <MapPin className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                    <input 
+                      type="text" 
+                      value={cep} 
+                      maxLength={9}
+                      onChange={async (e) => {
+                        const fmt = formatarCEP(e.target.value);
+                        setCep(fmt);
+                        const raw = e.target.value.replace(/\D/g, '');
+                        if (raw.length === 8) {
+                          try {
+                            const res = await fetch(`https://viacep.com.br/ws/${raw}/json/`);
+                            const data = await res.json();
+                            if (!data.erro) {
+                              const autoEnd = `${data.logradouro ? data.logradouro + ', ' : ''}${data.bairro ? data.bairro + ', ' : ''}${data.localidade || ''} - ${data.uf || ''}`;
+                              if (autoEnd) setEndereco(autoEnd);
+                              mostrarToast(`Endereço localizado: ${data.localidade} - ${data.uf}`, 'info');
+                            }
+                          } catch {}
+                        }
+                      }} 
+                      placeholder="00000-000" 
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono text-xs" 
+                    />
+                  </div>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-slate-300 mb-1">Endereço Completo</label>
+                  <div className="relative">
+                    <MapPin className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                    <input 
+                      type="text" 
+                      value={endereco} 
+                      onChange={(e) => setEndereco(e.target.value)} 
+                      placeholder="Av. Central, 1500 - Centro" 
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 text-xs" 
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -872,11 +910,12 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                 <div className="relative">
                   <Phone className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
                   <input 
-                    type="text" 
+                    type="tel" 
                     value={contato} 
-                    onChange={(e) => setContato(e.target.value)} 
+                    maxLength={15}
+                    onChange={(e) => setContato(formatarCelular(e.target.value))} 
                     placeholder="(11) 99999-8888" 
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" 
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono text-xs" 
                   />
                 </div>
               </div>
@@ -1004,7 +1043,10 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                           {/* PROPRIETÁRIO / CNPJ */}
                           <td className="p-3.5 space-y-0.5">
                             <div className="text-slate-200 font-medium">{lj.nomeProprietario}</div>
-                            <div className="text-[10px] text-slate-400 font-mono">{lj.cnpj}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">{formatarCpfCnpj(lj.cnpj)}</div>
+                            {lj.contato && lj.contato !== 'Não informado' && (
+                              <div className="text-[10px] text-emerald-400 font-mono">{formatarCelular(lj.contato)}</div>
+                            )}
                           </td>
 
                           {/* SENHA PROVISÓRIA COM TOGGLE */}
