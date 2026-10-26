@@ -50,7 +50,9 @@ import {
   WifiOff,
   Database,
   Tag,
-  Edit3
+  Edit3,
+  Crown,
+  Infinity
 } from 'lucide-react';
 import { db, collection, addDoc, setDoc, onSnapshot, doc, updateDoc, deleteDoc, query, where, orderBy, getDocs, getFirebaseStatus, salvarFirebaseConfig } from '../firebase';
 import { 
@@ -79,7 +81,8 @@ import {
   ClienteFidelidade,
   BannerPromocional,
   AgendamentoPWA,
-  ServicoLavaJato
+  ServicoLavaJato,
+  LavaJato
 } from '../types';
 import RelatorioFinanceiro from './RelatorioFinanceiro';
 import SistemaChecklist from './SistemaChecklist';
@@ -349,6 +352,66 @@ export default function PainelLavaJato({
   }, [unidadeNome, unidadeSlugSanitizada]);
 
   const unidadeLogada = unidadeSlugSanitizada;
+
+  // Informações da Unidade e Licença (Mensal ou Vitalícia)
+  const [unidadeInfo, setUnidadeInfo] = useState<LavaJato | null>(() => {
+    try {
+      const salvos = localStorage.getItem('hubwash_lava_jatos');
+      if (salvos) {
+        const lista: LavaJato[] = JSON.parse(salvos);
+        if (Array.isArray(lista)) {
+          const limpo = (unidadeNome || 'pitstop').trim().toLowerCase();
+          const encontrada = lista.find(u => 
+            String(u.id).toLowerCase() === limpo || 
+            String(u.nomeFantasia).toLowerCase() === limpo ||
+            String(u.id).toLowerCase() === unidadeSlugSanitizada
+          );
+          if (encontrada) return encontrada;
+        }
+      }
+    } catch {}
+    return null;
+  });
+
+  useEffect(() => {
+    const carregarUnidade = () => {
+      try {
+        const salvos = localStorage.getItem('hubwash_lava_jatos');
+        if (salvos) {
+          const lista: LavaJato[] = JSON.parse(salvos);
+          if (Array.isArray(lista)) {
+            const encontrada = lista.find(u => 
+              aliasesUnidade.some(alias => 
+                String(u.id).toLowerCase() === alias || 
+                String(u.nomeFantasia).toLowerCase() === alias
+              )
+            );
+            if (encontrada) setUnidadeInfo(encontrada);
+          }
+        }
+      } catch {}
+    };
+
+    carregarUnidade();
+    window.addEventListener('storage', carregarUnidade);
+
+    let unsubscribe: (() => void) | null = null;
+    if (db && unidadeLogada) {
+      try {
+        unsubscribe = onSnapshot(doc(db, 'unidades', unidadeLogada), (docSnap) => {
+          if (docSnap.exists()) {
+            const dados = docSnap.data() as LavaJato;
+            setUnidadeInfo(dados);
+          }
+        }, () => {});
+      } catch {}
+    }
+
+    return () => {
+      window.removeEventListener('storage', carregarUnidade);
+      if (unsubscribe) unsubscribe();
+    };
+  }, [aliasesUnidade, unidadeLogada]);
 
   // 🔄 Ouvinte em tempo real de novos agendamentos criados no celular/PWA
   useEffect(() => {
@@ -2284,6 +2347,27 @@ export default function PainelLavaJato({
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* BADGE DE LICENÇA DA UNIDADE */}
+            {unidadeInfo?.statusPlano === 'vitalicio' || unidadeInfo?.tipoPlano === 'vitalicio' ? (
+              <div 
+                onClick={() => setAbaAtiva('configuracao')}
+                className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-500/20 via-pink-500/10 to-amber-500/20 border border-purple-500/40 text-purple-200 text-xs font-bold shadow-sm cursor-pointer hover:border-purple-400/70 transition"
+                title="Sua unidade possui Licença Vitalícia Permanente (Clique para ver detalhes)"
+              >
+                <Crown size={14} className="text-amber-400 shrink-0" />
+                <span>Licença Vitalícia Ativa</span>
+              </div>
+            ) : (
+              <div 
+                onClick={() => setAbaAtiva('configuracao')}
+                className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium cursor-pointer transition"
+                title="Clique para ver detalhes da sua licença"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span>Plano: {unidadeInfo?.statusPlano === 'teste' ? 'Demonstração' : 'Mensal'}</span>
+              </div>
+            )}
+
             {/* BOTÃO QR CODE DO BALCÃO */}
             <button
               type="button"
@@ -3842,10 +3926,108 @@ export default function PainelLavaJato({
           {/* ABA 9: CONFIGURAÇÕES DO APP */}
           {/* ========================================== */}
           {abaAtiva === 'configuracao' && (
-            <div className="max-w-2xl bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
-              <h3 className="text-base font-bold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
-                <Settings className="w-5 h-5 text-blue-400" /> Personalização & Identidade Visual
-              </h3>
+            <div className="max-w-2xl space-y-6">
+              {/* CARD DE LICENÇA & PLANO DO SISTEMA (COMPRA VITALÍCIA / MENSALIDADE) */}
+              <div className="bg-gradient-to-br from-slate-900 via-slate-900/95 to-slate-950 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Crown className="w-5 h-5 text-amber-400" />
+                    <div>
+                      <h4 className="text-sm font-bold text-white">Licença do Aplicativo & Plano</h4>
+                      <p className="text-[11px] text-slate-400">Modalidade de assinatura ou aquisição vitalícia desta unidade</p>
+                    </div>
+                  </div>
+                  {unidadeInfo?.statusPlano === 'vitalicio' || unidadeInfo?.tipoPlano === 'vitalicio' ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-purple-500/20 to-amber-500/20 border border-purple-500/40 text-purple-300 rounded-full text-xs font-bold">
+                      <Sparkles size={12} className="text-amber-400" />
+                      Vitalício Definitivo
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-500/10 border border-blue-500/30 text-blue-400 rounded-full text-xs font-semibold">
+                      {unidadeInfo?.statusPlano === 'teste' ? 'Período de Testes' : 'Plano Mensal'}
+                    </span>
+                  )}
+                </div>
+
+                {unidadeInfo?.statusPlano === 'vitalicio' || unidadeInfo?.tipoPlano === 'vitalicio' ? (
+                  <div className="space-y-3">
+                    <div className="p-4 rounded-xl bg-gradient-to-r from-purple-950/40 via-purple-900/20 to-amber-950/30 border border-purple-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="text-sm font-bold text-white flex items-center gap-2">
+                          <Crown size={16} className="text-amber-400" />
+                          <span>Licença Vitalícia Adquirida em Definitivo</span>
+                        </div>
+                        <p className="text-xs text-slate-300 leading-relaxed max-w-lg">
+                          Esta unidade adquiriu o software em definitivo. O acesso é perpétuo, sem mensalidades ou taxas de renovação recorrentes, com todos os módulos e atualizações incluídos.
+                        </p>
+                      </div>
+                      <div className="bg-slate-900/90 border border-purple-500/40 rounded-xl px-4 py-2.5 text-center shrink-0">
+                        <span className="text-[10px] text-purple-300 block uppercase font-bold tracking-wider">Valor do Software</span>
+                        <span className="text-base font-black text-white">R$ {Number(unidadeInfo?.valorPlano || 2490).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                      <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl space-y-0.5">
+                        <span className="text-slate-400 text-[10px] block">Tipo de Licença</span>
+                        <span className="font-bold text-white">Perpétua / Definitiva</span>
+                      </div>
+                      <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl space-y-0.5">
+                        <span className="text-slate-400 text-[10px] block">Validade da Licença</span>
+                        <span className="font-bold text-amber-400 flex items-center gap-1">
+                          <Infinity size={13} /> Vitalício
+                        </span>
+                      </div>
+                      <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl space-y-0.5">
+                        <span className="text-slate-400 text-[10px] block">Mensalidade Futura</span>
+                        <span className="font-bold text-emerald-400">R$ 0,00 (Isento)</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl space-y-1">
+                        <span className="text-slate-400 text-[10px] block">Mensalidade Atual</span>
+                        <span className="font-bold text-white text-sm">
+                          R$ {Number(unidadeInfo?.valorPlano || 149.9).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} / mês
+                        </span>
+                        <span className="text-[10px] text-slate-500 block">Renovação recorrente</span>
+                      </div>
+                      <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl space-y-1">
+                        <span className="text-slate-400 text-[10px] block">Data de Expiração</span>
+                        <span className="font-bold text-amber-400 text-sm">
+                          {unidadeInfo?.dataExpiracao || 'Em 30 dias'}
+                        </span>
+                        <span className="text-[10px] text-slate-500 block">Ciclo ativo</span>
+                      </div>
+                    </div>
+
+                    {/* BANNER INFORMATIVO DE COMPRA VITALÍCIA */}
+                    <div className="p-4 rounded-xl bg-gradient-to-r from-purple-950/40 via-slate-900 to-amber-950/30 border border-purple-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="text-xs font-bold text-purple-200 flex items-center gap-1.5">
+                          <Crown size={14} className="text-amber-400" />
+                          <span>Deseja adquirir o aplicativo em definitivo?</span>
+                        </div>
+                        <p className="text-[11px] text-slate-300 leading-relaxed max-w-md">
+                          Adquira a <strong>Licença Vitalícia</strong> por um único pagamento e livre-se de mensalidades para sempre, mantendo acesso permanente a todos os recursos.
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-[10px] text-slate-400 block">Investimento Único</span>
+                        <span className="text-sm font-black text-amber-400">R$ 2.490,00</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* CARD DE PERSONALIZAÇÃO & IDENTIDADE VISUAL */}
+              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+                <h3 className="text-base font-bold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
+                  <Settings className="w-5 h-5 text-blue-400" /> Personalização & Identidade Visual
+                </h3>
 
               <div className="space-y-4 text-xs">
                 <div>
@@ -3984,7 +4166,8 @@ export default function PainelLavaJato({
                 </div>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
         </main>
       </div>

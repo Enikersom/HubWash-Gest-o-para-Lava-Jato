@@ -10,7 +10,8 @@ export interface LavaJato {
   valorPlano: number;
   dataCriacao: string;
   dataExpiracao: string;
-  statusPlano: 'teste' | 'ativo' | 'bloqueado';
+  statusPlano: 'teste' | 'ativo' | 'vitalicio' | 'bloqueado';
+  tipoPlano?: 'mensal' | 'anual' | 'vitalicio';
 }
 
 export interface ItemFila {

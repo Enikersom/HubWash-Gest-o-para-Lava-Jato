@@ -157,7 +157,7 @@ export async function salvarUnidadeServidor(unidade: LavaJato): Promise<LavaJato
   return null;
 }
 
-export async function atualizarStatusUnidadeServidor(id: string, statusPlano: 'ativo' | 'teste' | 'bloqueado'): Promise<boolean> {
+export async function atualizarStatusUnidadeServidor(id: string, statusPlano: 'ativo' | 'teste' | 'vitalicio' | 'bloqueado'): Promise<boolean> {
   try {
     const res = await fetchApiSegura(`/api/unidades/${encodeURIComponent(id)}`, {
       method: 'PATCH',

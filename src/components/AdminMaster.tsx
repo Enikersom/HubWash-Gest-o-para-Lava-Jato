@@ -24,7 +24,10 @@ import {
   ArrowLeft, 
   Download, 
   X, 
-  UserPlus
+  UserPlus,
+  Crown,
+  Sparkles,
+  Infinity
 } from 'lucide-react';
 import { LavaJato } from '../types';
 import { URL_BASE_NETLIFY } from '../App';
@@ -71,7 +74,7 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
   });
 
   const [filtroBusca, setFiltroBusca] = useState('');
-  const [filtroStatus, setFiltroStatus] = useState<'todos' | 'teste' | 'ativo' | 'bloqueado'>('todos');
+  const [filtroStatus, setFiltroStatus] = useState<'todos' | 'teste' | 'ativo' | 'vitalicio' | 'bloqueado'>('todos');
   const [mostrarSenha, setMostrarSenha] = useState<{ [key: string]: boolean }>({});
   const [copiadoId, setCopiadoId] = useState<string | null>(null);
   const [copiadoLinkModal, setCopiadoLinkModal] = useState(false);
@@ -95,6 +98,7 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
   const [endereco, setEndereco] = useState('');
   const [contato, setContato] = useState('');
   const [senhaProvisoria, setSenhaProvisoria] = useState('');
+  const [modalidadePlano, setModalidadePlano] = useState<'mensal' | 'vitalicio'>('mensal');
   const [valorPlano, setValorPlano] = useState('149.90');
 
   // SINCRONIZAÇÃO AUTOMÁTICA EM SEGUNDO PLANO COM O CLOUD FIRESTORE
@@ -264,6 +268,9 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
     dataExpiracao.setDate(hoje.getDate() + 30); // 30 dias de teste/ativação garantida
 
     const enderecoFormatado = cep ? `CEP: ${cep} - ${endereco.trim()}` : endereco.trim();
+    const isVitalicio = modalidadePlano === 'vitalicio';
+    const statusInicial: 'ativo' | 'vitalicio' = isVitalicio ? 'vitalicio' : 'ativo';
+    const expiracaoTexto = isVitalicio ? 'Vitalício (Sem expiração)' : dataExpiracao.toLocaleDateString('pt-BR');
 
     const novoLavaJato: LavaJato = {
       id: slug,
@@ -276,8 +283,9 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
       senhaProvisoria: senhaProvisoria.trim(),
       valorPlano: parseFloat(valorPlano) || 0,
       dataCriacao: hoje.toLocaleDateString('pt-BR'),
-      dataExpiracao: dataExpiracao.toLocaleDateString('pt-BR'),
-      statusPlano: 'ativo' // Começa sempre ativo e desbloqueado
+      dataExpiracao: expiracaoTexto,
+      statusPlano: statusInicial,
+      tipoPlano: isVitalicio ? 'vitalicio' : 'mensal'
     };
 
     const atualizados = [novoLavaJato, ...lavaJatos];
@@ -318,9 +326,15 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
     setEndereco('');
     setContato('');
     setSenhaProvisoria('');
+    setModalidadePlano('mensal');
     setValorPlano('149.90');
 
-    mostrarToast(`Lava-jato "${novoLavaJato.nomeFantasia}" cadastrado e ativado com sucesso!`, 'sucesso');
+    mostrarToast(
+      isVitalicio 
+        ? `Lava-jato "${novoLavaJato.nomeFantasia}" cadastrado com Licença Vitalícia (R$ ${novoLavaJato.valorPlano.toFixed(2)})!` 
+        : `Lava-jato "${novoLavaJato.nomeFantasia}" cadastrado e ativado com sucesso!`, 
+      'sucesso'
+    );
   };
 
   // FUNÇÃO PARA GERAR O QR CODE VISUAL VIA API GRATUITA
@@ -354,20 +368,37 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
     setItemParaExcluir(null);
   };
 
-  const alternarStatusPlano = async (id: string, novoStatus: 'teste' | 'ativo' | 'bloqueado') => {
-    const atualizados = lavaJatos.map(lj => lj.id === id ? { ...lj, statusPlano: novoStatus } : lj);
+  const alternarStatusPlano = async (id: string, novoStatus: 'teste' | 'ativo' | 'vitalicio' | 'bloqueado') => {
+    const atualizados = lavaJatos.map(lj => {
+      if (lj.id === id) {
+        return {
+          ...lj,
+          statusPlano: novoStatus,
+          tipoPlano: novoStatus === 'vitalicio' ? ('vitalicio' as const) : (lj.tipoPlano || 'mensal'),
+          dataExpiracao: novoStatus === 'vitalicio' ? 'Vitalício (Sem expiração)' : lj.dataExpiracao
+        };
+      }
+      return lj;
+    });
     salvarLavaJatosLocal(atualizados);
 
     try {
       await atualizarStatusUnidadeServidor(id, novoStatus);
       if (db) {
-        await updateDoc(doc(db, 'unidades', id), { statusPlano: novoStatus });
+        await setDoc(doc(db, 'unidades', id), { 
+          statusPlano: novoStatus,
+          tipoPlano: novoStatus === 'vitalicio' ? 'vitalicio' : 'mensal',
+          dataExpiracao: novoStatus === 'vitalicio' ? 'Vitalício (Sem expiração)' : undefined
+        }, { merge: true });
       }
     } catch (err) {
       console.warn('Erro ao atualizar status da unidade:', err);
     }
 
-    mostrarToast(`Status do plano atualizado para "${novoStatus.toUpperCase()}"!`, 'sucesso');
+    const mensagemStatus = novoStatus === 'vitalicio'
+      ? 'Plano atualizado para VITALÍCIO (Licença Perpétua do App)!'
+      : `Status do plano atualizado para "${novoStatus.toUpperCase()}"!`;
+    mostrarToast(mensagemStatus, 'sucesso');
   };
 
   const toggleSenha = (id: string) => {
@@ -407,11 +438,15 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
 
   const totalUnidades = lavaJatos.length;
   const unidadesAtivas = lavaJatos.filter(u => u.statusPlano === 'ativo').length;
+  const unidadesVitalicias = lavaJatos.filter(u => u.statusPlano === 'vitalicio').length;
   const unidadesEmTeste = lavaJatos.filter(u => u.statusPlano === 'teste').length;
   const unidadesBloqueadas = lavaJatos.filter(u => u.statusPlano === 'bloqueado').length;
   const receitaMensal = lavaJatos
     .filter(u => u.statusPlano === 'ativo')
-    .reduce((acc, curr) => acc + curr.valorPlano, 0);
+    .reduce((acc, curr) => acc + (curr.valorPlano || 0), 0);
+  const receitaVitaliciaTotal = lavaJatos
+    .filter(u => u.statusPlano === 'vitalicio')
+    .reduce((acc, curr) => acc + (curr.valorPlano || 0), 0);
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 antialiased font-sans flex flex-col justify-between relative">
@@ -606,25 +641,37 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
       {/* CONTEÚDO */}
       <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8 space-y-8 flex-1 w-full">
         {/* CARDS DE RESUMO MASTER */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4">
             <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Total Unidades</p>
             <p className="text-2xl font-black text-white mt-1">{totalUnidades}</p>
           </div>
           <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4">
-            <p className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider">Ativas / Pagas</p>
+            <p className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider">Ativas / Mensal</p>
             <p className="text-2xl font-black text-emerald-400 mt-1">{unidadesAtivas}</p>
           </div>
+          <div className="bg-gradient-to-br from-purple-950/40 via-slate-800/90 to-amber-950/30 border border-purple-500/40 rounded-2xl p-4 shadow-lg shadow-purple-950/30">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1">
+                <Crown size={12} className="text-amber-400" /> Vitalícias
+              </p>
+              <Sparkles size={12} className="text-purple-300" />
+            </div>
+            <p className="text-2xl font-black text-white mt-1">{unidadesVitalicias}</p>
+            <p className="text-[10px] text-purple-300 font-mono mt-0.5">
+              R$ {receitaVitaliciaTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            </p>
+          </div>
           <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4">
-            <p className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider">Período de Teste</p>
+            <p className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider">Em Teste (20d)</p>
             <p className="text-2xl font-black text-amber-400 mt-1">{unidadesEmTeste}</p>
           </div>
           <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4">
             <p className="text-[11px] font-semibold text-rose-400 uppercase tracking-wider">Bloqueados</p>
             <p className="text-2xl font-black text-rose-400 mt-1">{unidadesBloqueadas}</p>
           </div>
-          <div className="col-span-2 lg:col-span-1 bg-gradient-to-br from-blue-950/40 to-slate-800/90 border border-blue-700/40 rounded-2xl p-4">
-            <p className="text-[11px] font-semibold text-blue-400 uppercase tracking-wider">MRR Estimado</p>
+          <div className="col-span-2 sm:col-span-1 lg:col-span-1 bg-gradient-to-br from-blue-950/40 to-slate-800/90 border border-blue-700/40 rounded-2xl p-4">
+            <p className="text-[11px] font-semibold text-blue-400 uppercase tracking-wider">MRR Mensal</p>
             <p className="text-2xl font-black text-white mt-1">
               R$ {receitaMensal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </p>
@@ -766,6 +813,47 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                 </div>
               </div>
 
+              <div className="space-y-1.5 pt-1">
+                <label className="block text-slate-300">Modalidade de Licenciamento</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalidadePlano('mensal');
+                      if (valorPlano === '2490.00' || valorPlano === '1990.00') {
+                        setValorPlano('149.90');
+                      }
+                    }}
+                    className={`py-2 px-2.5 rounded-xl text-xs font-semibold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                      modalidadePlano === 'mensal'
+                        ? 'bg-blue-600/25 border-blue-500 text-blue-300 shadow-sm'
+                        : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Clock size={13} />
+                    <span>Mensalidade</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalidadePlano('vitalicio');
+                      if (valorPlano === '149.90') {
+                        setValorPlano('2490.00');
+                      }
+                    }}
+                    className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                      modalidadePlano === 'vitalicio'
+                        ? 'bg-gradient-to-r from-purple-600/30 via-slate-800 to-amber-600/30 border-purple-400 text-amber-300 shadow-md shadow-purple-950/50'
+                        : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-amber-300'
+                    }`}
+                  >
+                    <Crown size={13} className="text-amber-400" />
+                    <span>Compra Vitalícia</span>
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className="block text-slate-300 mb-1">Senha Provisória *</label>
@@ -783,7 +871,9 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 mb-1">Valor do Plano (R$)</label>
+                  <label className="block text-slate-300 mb-1">
+                    {modalidadePlano === 'vitalicio' ? 'Valor Compra Vitalícia (R$)' : 'Valor do Plano (R$)'}
+                  </label>
                   <div className="relative">
                     <DollarSign className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
                     <input 
@@ -791,17 +881,29 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                       step="0.01" 
                       value={valorPlano} 
                       onChange={(e) => setValorPlano(e.target.value)} 
-                      placeholder="149.90" 
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" 
+                      placeholder={modalidadePlano === 'vitalicio' ? '2490.00' : '149.90'} 
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-semibold" 
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="p-2.5 bg-blue-950/40 border border-blue-800/50 rounded-xl text-[11px] text-blue-300 flex items-start gap-2">
-                <Clock className="w-4 h-4 shrink-0 text-blue-400 mt-0.5" />
-                <span>O inquilino começará com <strong>20 dias de teste grátis</strong> a partir de hoje.</span>
-              </div>
+              {modalidadePlano === 'vitalicio' ? (
+                <div className="p-3 bg-gradient-to-r from-purple-950/70 via-slate-900 to-amber-950/50 border border-purple-500/40 rounded-xl text-[11px] text-purple-200 flex items-start gap-2.5 shadow-md">
+                  <Crown className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <strong className="text-amber-300 block font-bold">Compra Vitalícia do Aplicativo</strong>
+                    <span className="text-slate-300">
+                      O cliente adquire a posse definitiva do sistema. Acesso permanente sem mensalidades futuras e sem prazo de expiração.
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-2.5 bg-blue-950/40 border border-blue-800/50 rounded-xl text-[11px] text-blue-300 flex items-start gap-2">
+                  <Clock className="w-4 h-4 shrink-0 text-blue-400 mt-0.5" />
+                  <span>O inquilino começará com <strong>20 dias de teste grátis</strong> a partir de hoje.</span>
+                </div>
+              )}
 
               <button 
                 type="submit" 
@@ -838,9 +940,10 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                   onChange={(e) => setFiltroStatus(e.target.value as any)}
                   className="bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
                 >
-                  <option value="todos">Todos</option>
-                  <option value="teste">Teste</option>
-                  <option value="ativo">Ativo</option>
+                  <option value="todos">Todos os Status</option>
+                  <option value="teste">Em Teste</option>
+                  <option value="ativo">Ativo (Mensal)</option>
+                  <option value="vitalicio">👑 Vitalício (Definitivo)</option>
                   <option value="bloqueado">Bloqueado</option>
                 </select>
               </div>
@@ -861,7 +964,7 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                   <thead>
                     <tr className="bg-slate-900 text-slate-400 font-semibold border-b border-slate-700">
                       <th className="p-3.5">Unidade / Link</th>
-                      <th className="p-3.5">Proprietário / CNPJ</th>
+                      <th className="p-3.5">Proprietário / CNPJ / Plano</th>
                       <th className="p-3.5">Senha</th>
                       <th className="p-3.5">Status</th>
                       <th className="p-3.5 text-center">QR Code</th>
@@ -870,8 +973,9 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                   </thead>
                   <tbody className="divide-y divide-slate-700/50">
                     {listaFiltrada.map((lj) => {
-                      const statusBadge = {
+                      const statusBadge: Record<string, string> = {
                         ativo: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400',
+                        vitalicio: 'bg-gradient-to-r from-purple-500/20 to-amber-500/20 border-purple-500/40 text-purple-300 font-bold shadow-sm',
                         teste: 'bg-amber-500/10 border-amber-500/30 text-amber-400',
                         bloqueado: 'bg-rose-500/10 border-rose-500/30 text-rose-400'
                       };
@@ -892,6 +996,16 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                             <div className="text-[10px] text-slate-400 font-mono">{formatarCpfCnpj(lj.cnpj)}</div>
                             {lj.contato && lj.contato !== 'Não informado' && (
                               <div className="text-[10px] text-emerald-400 font-mono">{formatarCelular(lj.contato)}</div>
+                            )}
+                            {lj.statusPlano === 'vitalicio' || lj.tipoPlano === 'vitalicio' ? (
+                              <div className="inline-flex items-center gap-1 text-[10px] text-purple-300 font-bold bg-purple-950/60 border border-purple-800/80 px-2 py-0.5 rounded-md mt-1 shadow-sm">
+                                <Crown size={11} className="text-amber-400 shrink-0" />
+                                <span>Vitalício: R$ {Number(lj.valorPlano || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-slate-400 font-medium mt-1">
+                                Mensal: R$ {Number(lj.valorPlano || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/mês
+                              </div>
                             )}
                           </td>
 
@@ -917,10 +1031,11 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                             <select
                               value={lj.statusPlano}
                               onChange={(e) => alternarStatusPlano(lj.id, e.target.value as any)}
-                              className={`bg-slate-950 border rounded-lg px-2 py-1 text-xs font-semibold cursor-pointer ${statusBadge[lj.statusPlano]}`}
+                              className={`bg-slate-950 border rounded-lg px-2 py-1 text-xs font-semibold cursor-pointer ${statusBadge[lj.statusPlano] || ''}`}
                             >
                               <option value="teste">Teste (20d)</option>
-                              <option value="ativo">Ativo / Pago</option>
+                              <option value="ativo">Ativo / Mensal</option>
+                              <option value="vitalicio">👑 Vitalício (Definitivo)</option>
                               <option value="bloqueado">Bloqueado</option>
                             </select>
                           </td>

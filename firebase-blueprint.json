@@ -59,7 +59,8 @@
         "valorPlano": { "type": "number" },
         "dataCriacao": { "type": "string" },
         "dataExpiracao": { "type": "string" },
-        "statusPlano": { "type": "string", "enum": ["ativo", "teste", "bloqueado"] }
+        "statusPlano": { "type": "string", "enum": ["ativo", "teste", "vitalicio", "bloqueado"] },
+        "tipoPlano": { "type": "string", "enum": ["mensal", "anual", "vitalicio"] }
       },
       "required": ["id", "nomeFantasia", "senhaProvisoria", "statusPlano"]
     },
