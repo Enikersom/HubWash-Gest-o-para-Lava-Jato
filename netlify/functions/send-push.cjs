@@ -10,8 +10,24 @@ const admin = require('firebase-admin');
 if (!admin.apps.length) {
   try {
     // Opção 1: Credenciais completas em JSON numa única variável de ambiente
-    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    const envServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT || 
+                              process.env.FIREBASE_CREDENTIALS || 
+                              process.env.FIREBASE_CONFIG || 
+                              process.env.SERVICE_ACCOUNT;
+
+    if (envServiceAccount) {
+      let rawConfig = envServiceAccount.trim();
+      // Suporta caso o usuário cole em Base64 ou texto puro
+      if (!rawConfig.startsWith('{') && !rawConfig.endsWith('}')) {
+        try {
+          rawConfig = Buffer.from(rawConfig, 'base64').toString('utf-8').trim();
+        } catch (_) {}
+      }
+      const serviceAccount = JSON.parse(rawConfig);
+      // Corrige quebras de linha da chave privada RSA caso tenham sido escapadas
+      if (serviceAccount.private_key) {
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+      }
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount)
       });

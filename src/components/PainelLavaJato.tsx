@@ -114,6 +114,110 @@ export default function PainelLavaJato({
     'fila' | 'pdv' | 'agendamentos' | 'servicos' | 'checklist' | 'relatorio' | 'caixa' | 'produtos' | 'clientes' | 'funcionarios' | 'banner' | 'configuracao'
   >('fila');
 
+  // Identificação e isolamento multi-inquilino exclusivo da Unidade
+  const unidadeSlugSanitizada = useMemo(() => {
+    try {
+      const salvos = localStorage.getItem('hubwash_lava_jatos');
+      if (salvos) {
+        const lista = JSON.parse(salvos);
+        if (Array.isArray(lista)) {
+          const encontrada = lista.find((u: any) => 
+            String(u.nomeFantasia || '').toLowerCase().trim() === String(unidadeNome || '').toLowerCase().trim() ||
+            String(u.id || '').toLowerCase().trim() === String(unidadeNome || '').toLowerCase().trim()
+          );
+          if (encontrada && encontrada.id) {
+            return String(encontrada.id).toLowerCase().trim();
+          }
+        }
+      }
+    } catch {}
+
+    return (unidadeNome || 'pitstop')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '') || 'pitstop';
+  }, [unidadeNome]);
+
+  const unidadeLogada = unidadeSlugSanitizada;
+
+  const isPitStop = useMemo(() => {
+    const slug = (unidadeSlugSanitizada || '').toLowerCase();
+    const nome = (unidadeNome || '').toLowerCase();
+    return slug === 'pitstop' || slug.includes('pitstop') || nome.includes('pit stop');
+  }, [unidadeSlugSanitizada, unidadeNome]);
+
+  // Apelidos estritos da unidade (sem palavras genéricas como 'lava' ou 'jato')
+  const aliasesUnidade = useMemo(() => {
+    const aliases = new Set<string>();
+    const limpo = (unidadeNome || 'pitstop').trim().toLowerCase();
+    aliases.add(limpo);
+    aliases.add(unidadeSlugSanitizada);
+    
+    const semAcento = limpo.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    aliases.add(semAcento);
+    
+    const slugComTraco = semAcento.replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    if (slugComTraco) aliases.add(slugComTraco);
+    
+    const slugSemTraco = semAcento.replace(/[^a-z0-9]/g, '');
+    if (slugSemTraco) aliases.add(slugSemTraco);
+
+    try {
+      const salvos = localStorage.getItem('hubwash_lava_jatos');
+      if (salvos) {
+        const lista = JSON.parse(salvos);
+        if (Array.isArray(lista)) {
+          const encontrada = lista.find((u: any) => 
+            String(u.id).toLowerCase() === limpo || 
+            String(u.nomeFantasia).toLowerCase() === limpo ||
+            String(u.id).toLowerCase() === slugComTraco ||
+            String(u.id).toLowerCase() === slugSemTraco ||
+            String(u.id).toLowerCase() === unidadeSlugSanitizada
+          );
+          if (encontrada) {
+            if (encontrada.id) aliases.add(String(encontrada.id).toLowerCase().trim());
+            if (encontrada.nomeFantasia) aliases.add(String(encontrada.nomeFantasia).toLowerCase().trim());
+          }
+        }
+      }
+    } catch {}
+
+    // Remove palavras genéricas que causavam falso positivo e vazamento entre empresas diferentes
+    const stopwords = new Set(['lava', 'jato', 'lavajato', 'posto', 'car', 'wash', 'auto', 'express']);
+    return Array.from(aliases).filter(a => a && !stopwords.has(a));
+  }, [unidadeNome, unidadeSlugSanitizada]);
+
+  // Validador estrito de pertencimento à unidade
+  const matchUnidade = (docData: any): boolean => {
+    if (!docData) return false;
+    const docId = String(
+      docData.unidadeId || 
+      docData.unidadeVinculadaId || 
+      docData.unidadeSlug || 
+      ''
+    ).toLowerCase().trim();
+
+    const docNome = String(docData.unidadeNome || '').toLowerCase().trim();
+
+    // 1. Se tem ID de unidade cadastrado
+    if (docId) {
+      return aliasesUnidade.includes(docId);
+    }
+
+    // 2. Se tem apenas o nome da empresa por extenso
+    if (docNome) {
+      return aliasesUnidade.includes(docNome) || 
+             docNome === unidadeSlugSanitizada || 
+             docNome === (unidadeNome || '').toLowerCase().trim();
+    }
+
+    // 3. Documento legado sem nenhuma unidade vinculada: pertence exclusivamente ao Pit Stop
+    return isPitStop;
+  };
+
   // CONTROLADORES DE CORES PARA PERSONALIZAÇÃO DO APP
   const [corPrimaria, setCorPrimaria] = useState<'blue' | 'indigo' | 'emerald' | 'cyan' | 'violet' | 'amber'>('blue');
   const [nomeLavaJato, setNomeLavaJato] = useState(unidadeNome);
@@ -230,8 +334,15 @@ export default function PainelLavaJato({
   // 1. FILA DE LAVAGEM
   // ==========================================
   const [veiculosFila, setVeiculosFila] = useState<ItemFila[]>(() => {
-    const salvos = localStorage.getItem('hubwash_fila');
-    return salvos ? JSON.parse(salvos) : [];
+    try {
+      const salvosUnidade = localStorage.getItem(`hubwash_fila_${unidadeSlugSanitizada}`);
+      if (salvosUnidade) return JSON.parse(salvosUnidade);
+      if (isPitStop) {
+        const salvos = localStorage.getItem('hubwash_fila');
+        return salvos ? JSON.parse(salvos) : [];
+      }
+    } catch {}
+    return [];
   });
   const [novoClienteFila, setNovoClienteFila] = useState('');
   const [novoVeiculoFila, setNovoVeiculoFila] = useState('');
@@ -241,15 +352,27 @@ export default function PainelLavaJato({
   const [buscaFila, setBuscaFila] = useState('');
 
   useEffect(() => {
-    localStorage.setItem('hubwash_fila', JSON.stringify(veiculosFila));
-  }, [veiculosFila]);
+    try {
+      localStorage.setItem(`hubwash_fila_${unidadeSlugSanitizada}`, JSON.stringify(veiculosFila));
+      if (isPitStop) {
+        localStorage.setItem('hubwash_fila', JSON.stringify(veiculosFila));
+      }
+    } catch {}
+  }, [veiculosFila, unidadeSlugSanitizada, isPitStop]);
 
   // ==========================================
   // 2. FUNCIONÁRIOS & COMISSÕES
   // ==========================================
   const [funcionarios, setFuncionarios] = useState<Funcionario[]>(() => {
-    const salvos = localStorage.getItem('hubwash_funcionarios');
-    return salvos ? JSON.parse(salvos) : [];
+    try {
+      const salvosUnidade = localStorage.getItem(`hubwash_funcionarios_${unidadeSlugSanitizada}`);
+      if (salvosUnidade) return JSON.parse(salvosUnidade);
+      if (isPitStop) {
+        const salvos = localStorage.getItem('hubwash_funcionarios');
+        return salvos ? JSON.parse(salvos) : [];
+      }
+    } catch {}
+    return [];
   });
   const [novoFuncNome, setNovoFuncNome] = useState('');
   const [novoFuncCargo, setNovoFuncCargo] = useState('Lavador');
@@ -257,23 +380,40 @@ export default function PainelLavaJato({
   const [novoFuncTel, setNovoFuncTel] = useState('');
 
   useEffect(() => {
-    localStorage.setItem('hubwash_funcionarios', JSON.stringify(funcionarios));
-  }, [funcionarios]);
+    try {
+      localStorage.setItem(`hubwash_funcionarios_${unidadeSlugSanitizada}`, JSON.stringify(funcionarios));
+      if (isPitStop) {
+        localStorage.setItem('hubwash_funcionarios', JSON.stringify(funcionarios));
+      }
+    } catch {}
+  }, [funcionarios, unidadeSlugSanitizada, isPitStop]);
 
   // ==========================================
   // 3. FLUXO DE CAIXA
   // ==========================================
   const [movimentacoesCaixa, setMovimentacoesCaixa] = useState<MovimentacaoCaixa[]>(() => {
-    const salvos = localStorage.getItem('hubwash_caixa');
-    return salvos ? JSON.parse(salvos) : [];
+    try {
+      const salvosUnidade = localStorage.getItem(`hubwash_caixa_${unidadeSlugSanitizada}`);
+      if (salvosUnidade) return JSON.parse(salvosUnidade);
+      if (isPitStop) {
+        const salvos = localStorage.getItem('hubwash_caixa');
+        return salvos ? JSON.parse(salvos) : [];
+      }
+    } catch {}
+    return [];
   });
   const [novaDescCaixa, setNovaDescCaixa] = useState('');
   const [novoValorCaixa, setNovoValorCaixa] = useState('');
   const [novoTipoCaixa, setNovoTipoCaixa] = useState<'entrada' | 'saida'>('entrada');
 
   useEffect(() => {
-    localStorage.setItem('hubwash_caixa', JSON.stringify(movimentacoesCaixa));
-  }, [movimentacoesCaixa]);
+    try {
+      localStorage.setItem(`hubwash_caixa_${unidadeSlugSanitizada}`, JSON.stringify(movimentacoesCaixa));
+      if (isPitStop) {
+        localStorage.setItem('hubwash_caixa', JSON.stringify(movimentacoesCaixa));
+      }
+    } catch {}
+  }, [movimentacoesCaixa, unidadeSlugSanitizada, isPitStop]);
 
   // ==========================================
   // 4. CHECKLIST COM FOTOS E AVARIAS
@@ -333,28 +473,41 @@ export default function PainelLavaJato({
     } catch {}
   }, [produtos]);
 
-  // Vendas PDV (Frente de Caixa)
+  // Vendas PDV (Frente de Caixa isolado por unidade)
   const [vendasPDV, setVendasPDV] = useState<VendaPDV[]>(() => {
     try {
-      const salvos = localStorage.getItem('hubwash_vendas_pdv');
-      return salvos ? JSON.parse(salvos) : [];
-    } catch {
-      return [];
-    }
+      const salvosUnidade = localStorage.getItem(`hubwash_vendas_pdv_${unidadeSlugSanitizada}`);
+      if (salvosUnidade) return JSON.parse(salvosUnidade);
+      if (isPitStop) {
+        const salvos = localStorage.getItem('hubwash_vendas_pdv');
+        return salvos ? JSON.parse(salvos) : [];
+      }
+    } catch {}
+    return [];
   });
 
   useEffect(() => {
     try {
-      localStorage.setItem('hubwash_vendas_pdv', JSON.stringify(vendasPDV));
+      localStorage.setItem(`hubwash_vendas_pdv_${unidadeSlugSanitizada}`, JSON.stringify(vendasPDV));
+      if (isPitStop) {
+        localStorage.setItem('hubwash_vendas_pdv', JSON.stringify(vendasPDV));
+      }
     } catch {}
-  }, [vendasPDV]);
+  }, [vendasPDV, unidadeSlugSanitizada, isPitStop]);
 
   // ==========================================
-  // 6. CLIENTES & FIDELIDADE
+  // 6. CLIENTES & FIDELIDADE (ISOLADOS POR UNIDADE)
   // ==========================================
   const [clientes, setClientes] = useState<ClienteFidelidade[]>(() => {
-    const salvos = localStorage.getItem('hubwash_clientes_fidelidade');
-    return salvos ? JSON.parse(salvos) : [];
+    try {
+      const salvosUnidade = localStorage.getItem(`hubwash_clientes_fidelidade_${unidadeSlugSanitizada}`);
+      if (salvosUnidade) return JSON.parse(salvosUnidade);
+      if (isPitStop) {
+        const salvos = localStorage.getItem('hubwash_clientes_fidelidade');
+        return salvos ? JSON.parse(salvos) : [];
+      }
+    } catch {}
+    return [];
   });
   const [novoCliNome, setNovoCliNome] = useState('');
   const [novoCliEmail, setNovoCliEmail] = useState('');
@@ -363,15 +516,27 @@ export default function PainelLavaJato({
   const [buscaCliente, setBuscaCliente] = useState('');
 
   useEffect(() => {
-    localStorage.setItem('hubwash_clientes_fidelidade', JSON.stringify(clientes));
-  }, [clientes]);
+    try {
+      localStorage.setItem(`hubwash_clientes_fidelidade_${unidadeSlugSanitizada}`, JSON.stringify(clientes));
+      if (isPitStop) {
+        localStorage.setItem('hubwash_clientes_fidelidade', JSON.stringify(clientes));
+      }
+    } catch {}
+  }, [clientes, unidadeSlugSanitizada, isPitStop]);
 
   // ==========================================
-  // 7. AGENDAMENTOS PWA
+  // 7. AGENDAMENTOS PWA (ISOLADOS POR UNIDADE)
   // ==========================================
   const [agendamentos, setAgendamentos] = useState<AgendamentoPWA[]>(() => {
-    const salvos = localStorage.getItem('hubwash_agendamentos_painel');
-    return salvos ? JSON.parse(salvos) : [];
+    try {
+      const salvosUnidade = localStorage.getItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`);
+      if (salvosUnidade) return JSON.parse(salvosUnidade);
+      if (isPitStop) {
+        const salvos = localStorage.getItem('hubwash_agendamentos_painel');
+        return salvos ? JSON.parse(salvos) : [];
+      }
+    } catch {}
+    return [];
   });
   const [novoAgendCliente, setNovoAgendCliente] = useState('');
   const [novoAgendTel, setNovoAgendTel] = useState('');
@@ -401,80 +566,12 @@ export default function PainelLavaJato({
 
   useEffect(() => {
     try {
-      localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(agendamentos));
-    } catch {}
-  }, [agendamentos]);
-
-  // Slug limpo e padronizado SEM ESPAÇOS nem caracteres especiais para links e QR Codes
-  const unidadeSlugSanitizada = useMemo(() => {
-    try {
-      const salvos = localStorage.getItem('hubwash_lava_jatos');
-      if (salvos) {
-        const lista = JSON.parse(salvos);
-        if (Array.isArray(lista)) {
-          const encontrada = lista.find((u: any) => 
-            String(u.nomeFantasia || '').toLowerCase().trim() === String(unidadeNome || '').toLowerCase().trim() ||
-            String(u.id || '').toLowerCase().trim() === String(unidadeNome || '').toLowerCase().trim()
-          );
-          if (encontrada && encontrada.id) {
-            return String(encontrada.id).toLowerCase().trim();
-          }
-        }
+      localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(agendamentos));
+      if (isPitStop) {
+        localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(agendamentos));
       }
     } catch {}
-
-    return (unidadeNome || 'pitstop')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9]/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '') || 'pitstop';
-  }, [unidadeNome]);
-
-  // Helper para identificar a unidade logada padronizada e todos os seus apelidos/slugs
-  const aliasesUnidade = useMemo(() => {
-    const aliases = new Set<string>();
-    const limpo = (unidadeNome || 'pitstop').trim().toLowerCase();
-    aliases.add(limpo);
-    aliases.add(unidadeSlugSanitizada);
-    
-    const semAcento = limpo.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    aliases.add(semAcento);
-    
-    const slugComTraco = semAcento.replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-    aliases.add(slugComTraco);
-    
-    const slugSemTraco = semAcento.replace(/[^a-z0-9]/g, '');
-    aliases.add(slugSemTraco);
-
-    // Adiciona palavras-chave individuais (ex: 'pit', 'stop') para não perder correspondência
-    semAcento.split(/[^a-z0-9]+/).filter(w => w.length > 2).forEach(p => aliases.add(p));
-
-    try {
-      const salvos = localStorage.getItem('hubwash_lava_jatos');
-      if (salvos) {
-        const lista = JSON.parse(salvos);
-        if (Array.isArray(lista)) {
-          const encontrada = lista.find((u: any) => 
-            String(u.id).toLowerCase() === limpo || 
-            String(u.nomeFantasia).toLowerCase() === limpo ||
-            String(u.id).toLowerCase() === slugComTraco ||
-            String(u.id).toLowerCase() === slugSemTraco ||
-            String(u.id).toLowerCase() === unidadeSlugSanitizada
-          );
-          if (encontrada) {
-            if (encontrada.id) aliases.add(String(encontrada.id).toLowerCase());
-            if (encontrada.nomeFantasia) aliases.add(String(encontrada.nomeFantasia).toLowerCase());
-          }
-        }
-      }
-    } catch {}
-
-    return Array.from(aliases).filter(Boolean);
-  }, [unidadeNome, unidadeSlugSanitizada]);
-
-  const unidadeLogada = unidadeSlugSanitizada;
+  }, [agendamentos, unidadeSlugSanitizada, isPitStop]);
 
   // Informações da Unidade e Licença (Mensal ou Vitalícia)
   const [unidadeInfo, setUnidadeInfo] = useState<LavaJato | null>(() => {
@@ -556,10 +653,7 @@ export default function PainelLavaJato({
               let novosAdicionados = false;
               lista.forEach((item: any) => {
                 if (idsExcluidosRef.current.has(item.id)) return;
-                const docUnidade = String(item.unidadeId || item.unidadeVinculadaId || item.unidadeSlug || item.unidadeNome || '').toLowerCase().trim();
-                const pertence = !docUnidade || aliasesUnidade.some(alias => 
-                  docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
-                );
+                const pertence = matchUnidade(item);
                 if (pertence && !mapa.has(item.id)) {
                   novosAdicionados = true;
                 }
@@ -633,10 +727,7 @@ export default function PainelLavaJato({
             const agsFirestore: AgendamentoPWA[] = [];
             snap.forEach((docSnap: any) => {
               const data = docSnap.data();
-              const docUnidade = String(data.unidadeId || data.unidadeVinculadaId || data.unidadeSlug || data.unidadeNome || '').toLowerCase();
-              const pertence = !docUnidade || aliasesUnidade.some(alias => 
-                docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
-              );
+              const pertence = matchUnidade(data);
 
             if (pertence) {
               const veiculoFormatado = data.veiculo || (data.modelo ? `${data.modelo}${data.placa ? ` (${data.placa})` : ''}` : 'Veículo Agendado');
@@ -712,10 +803,7 @@ export default function PainelLavaJato({
               const mapa = new Map<string, AgendamentoPWA>();
               prev.forEach((a) => mapa.set(a.id, a));
               lista.forEach((a: any) => {
-                const docUnidade = String(a.unidadeId || a.unidadeVinculadaId || a.unidadeSlug || a.unidadeNome || '').toLowerCase();
-                const pertence = !docUnidade || aliasesUnidade.some(alias => 
-                  docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
-                );
+                const pertence = matchUnidade(a);
                 if (pertence && !mapa.has(a.id)) {
                   mapa.set(a.id, a);
                   carregados++;
@@ -816,14 +904,7 @@ export default function PainelLavaJato({
 
         if (dados.clientes && dados.clientes.length > 0) {
           const clientesMapeados: ClienteFidelidade[] = dados.clientes
-            .filter((c: any) => {
-              const docUnidade = String(c.unidadeVinculadaId || c.unidadeId || c.unidadeSlug || c.unidadeNome || '').toLowerCase();
-              return !docUnidade || aliasesUnidade.some(alias => 
-                docUnidade === alias || 
-                docUnidade.includes(alias) || 
-                alias.includes(docUnidade)
-              );
-            })
+            .filter((c: any) => matchUnidade(c))
             .map((c: any) => {
               const veiculoFormatado = c.modelo
                 ? `${c.modelo}${c.placa ? ` (${c.placa})` : ''}`
@@ -840,9 +921,8 @@ export default function PainelLavaJato({
               };
             });
 
-          setClientes((prev) => {
+          setClientes(() => {
             const mapa = new Map<string, ClienteFidelidade>();
-            prev.forEach((item) => mapa.set(item.id, item));
             clientesMapeados.forEach((item) => mapa.set(item.id, item));
             return Array.from(mapa.values());
           });
@@ -850,14 +930,7 @@ export default function PainelLavaJato({
 
         if (dados.agendamentos && dados.agendamentos.length > 0) {
           const agendamentosMapeados: AgendamentoPWA[] = dados.agendamentos
-            .filter((a: any) => {
-              const docUnidade = String(a.unidadeId || a.unidadeVinculadaId || a.unidadeSlug || a.unidadeNome || '').toLowerCase();
-              return !docUnidade || aliasesUnidade.some(alias => 
-                docUnidade === alias || 
-                docUnidade.includes(alias) || 
-                alias.includes(docUnidade)
-              );
-            })
+            .filter((a: any) => matchUnidade(a))
             .map((a: any) => {
               const veiculoFormatado = a.veiculo || (a.modelo ? `${a.modelo}${a.placa ? ` (${a.placa})` : ''}` : 'Veículo Agendado');
               return {
@@ -872,9 +945,8 @@ export default function PainelLavaJato({
               };
             });
 
-          setAgendamentos((prev) => {
+          setAgendamentos(() => {
             const mapa = new Map<string, AgendamentoPWA>();
-            prev.forEach((item) => mapa.set(item.id, item));
             agendamentosMapeados.forEach((item) => mapa.set(item.id, item));
             return Array.from(mapa.values());
           });
@@ -951,13 +1023,7 @@ export default function PainelLavaJato({
             const clientesFirestore: ClienteFidelidade[] = [];
             snapshot.forEach((docSnap: any) => {
               const data = docSnap.data();
-              const docUnidade = String(data.unidadeVinculadaId || data.unidadeId || data.unidadeSlug || data.unidadeNome || '').toLowerCase();
-              
-              const pertence = !docUnidade || aliasesUnidade.some(alias => 
-                docUnidade === alias || 
-                docUnidade.includes(alias) || 
-                alias.includes(docUnidade)
-              );
+              const pertence = matchUnidade(data);
 
               if (pertence) {
                 const veiculoFormatado = data.modelo
@@ -976,30 +1042,21 @@ export default function PainelLavaJato({
               }
             });
 
-            if (clientesFirestore.length > 0) {
-              setClientes((prev) => {
-                const mapa = new Map<string, ClienteFidelidade>();
-                const getChaveCliente = (c: ClienteFidelidade) => 
-                  (c.email && c.email.trim().toLowerCase()) || 
-                  (c.telefone && c.telefone.replace(/\D/g, '')) || 
-                  c.id;
-
-                clientesFirestore.forEach((c) => {
-                  mapa.set(getChaveCliente(c), c);
-                });
-                prev.forEach((c) => {
-                  const chave = getChaveCliente(c);
-                  if (!mapa.has(chave)) {
-                    mapa.set(chave, c);
-                  }
-                });
-                const listaFinal = Array.from(mapa.values());
-                try {
-                  localStorage.setItem('hubwash_clientes_fidelidade', JSON.stringify(listaFinal));
-                } catch {}
-                return listaFinal;
+            setClientes(() => {
+              const mapa = new Map<string, ClienteFidelidade>();
+              clientesFirestore.forEach((c) => {
+                const chave = c.id || c.email || c.telefone;
+                mapa.set(chave, c);
               });
-            }
+              const listaFinal = Array.from(mapa.values());
+              try {
+                localStorage.setItem(`hubwash_clientes_fidelidade_${unidadeSlugSanitizada}`, JSON.stringify(listaFinal));
+                if (isPitStop) {
+                  localStorage.setItem('hubwash_clientes_fidelidade', JSON.stringify(listaFinal));
+                }
+              } catch {}
+              return listaFinal;
+            });
           },
           (error: any) => {
             console.warn('Firestore onSnapshot clientes (Painel):', error);
@@ -1013,13 +1070,7 @@ export default function PainelLavaJato({
             const agendamentosFirestore: AgendamentoPWA[] = [];
             snapshot.forEach((docSnap: any) => {
               const data = docSnap.data();
-              const docUnidade = String(data.unidadeId || data.unidadeVinculadaId || data.unidadeSlug || data.unidadeNome || '').toLowerCase();
-              
-              const pertence = !docUnidade || aliasesUnidade.some(alias => 
-                docUnidade === alias || 
-                docUnidade.includes(alias) || 
-                alias.includes(docUnidade)
-              );
+              const pertence = matchUnidade(data);
 
               if (pertence) {
                 const veiculoFormatado = data.veiculo || (data.modelo ? `${data.modelo}${data.placa ? ` (${data.placa})` : ''}` : 'Veículo Agendado');
@@ -1042,31 +1093,29 @@ export default function PainelLavaJato({
                 snapshot.docChanges().forEach((change: any) => {
                   if (change.type === 'added') {
                     const d = change.doc.data();
-                    mostrarToast(`🔔 Novo agendamento via celular: ${d.cliente || 'Cliente'} às ${d.horario || ''} (${d.servico || 'Lavagem'})`, 'sucesso');
+                    if (matchUnidade(d)) {
+                      mostrarToast(`🔔 Novo agendamento via celular: ${d.cliente || 'Cliente'} às ${d.horario || ''} (${d.servico || 'Lavagem'})`, 'sucesso');
+                    }
                   }
                 });
               } catch {}
             }
             isFirstLoadAgendamentos.current = false;
 
-            if (agendamentosFirestore.length > 0) {
-              setAgendamentos((prev) => {
-                const mapa = new Map<string, AgendamentoPWA>();
-                agendamentosFirestore
-                  .filter(a => !idsExcluidosRef.current.has(a.id))
-                  .forEach((a) => mapa.set(a.id, a));
-                prev
-                  .filter(a => !idsExcluidosRef.current.has(a.id))
-                  .forEach((a) => {
-                    if (!mapa.has(a.id)) mapa.set(a.id, a);
-                  });
-                const listaFinal = Array.from(mapa.values());
-                try {
+            setAgendamentos(() => {
+              const mapa = new Map<string, AgendamentoPWA>();
+              agendamentosFirestore
+                .filter(a => !idsExcluidosRef.current.has(a.id))
+                .forEach((a) => mapa.set(a.id, a));
+              const listaFinal = Array.from(mapa.values());
+              try {
+                localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(listaFinal));
+                if (isPitStop) {
                   localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(listaFinal));
-                } catch {}
-                return listaFinal;
-              });
-            }
+                }
+              } catch {}
+              return listaFinal;
+            });
           },
           (error: any) => {
             console.warn('Firestore onSnapshot agendamentos (Painel):', error);
