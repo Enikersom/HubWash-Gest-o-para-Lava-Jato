@@ -53,6 +53,8 @@ interface DatabaseSchema {
   lavaJatos: any[];
   banners?: any[];
   servicos?: any[];
+  produtos?: any[];
+  vendas?: any[];
 }
 
 function carregarBanco(): DatabaseSchema {
@@ -102,6 +104,24 @@ function carregarBanco(): DatabaseSchema {
           { id: 'srv_5', nome: 'Polimento Técnico Cristalizado', valor: 280.00, tempoMedioMinutos: 180, categoria: 'Estética', descricao: 'Eliminação de micro-riscos e selante de alto brilho.', ativo: true, unidadeId: 'pitstop' },
           { id: 'srv_6', nome: 'Lavagem de Motor e Chassi', valor: 90.00, tempoMedioMinutos: 45, categoria: 'Lavagem', descricao: 'Desengraxe técnico e proteção de motor.', ativo: true, unidadeId: 'pitstop' }
         ];
+      }
+
+      if (!Array.isArray(parsed.produtos) || parsed.produtos.length === 0) {
+        parsed.produtos = [
+          { id: 'prod_1', nome: 'Aromatizante Folha Little Trees', precoVenda: 18.00, precoCusto: 8.50, estoque: 25, min: 5, categoria: 'Aromatizantes', codigoBarras: '78910001', ativo: true, unidadeId: 'pitstop', descricao: 'Aromatizante importado para retrovisor com aroma duradouro.' },
+          { id: 'prod_2', nome: 'Aromatizante Gel Carro Novo 60g', precoVenda: 15.00, precoCusto: 6.00, estoque: 20, min: 4, categoria: 'Aromatizantes', codigoBarras: '78910002', ativo: true, unidadeId: 'pitstop', descricao: 'Fragrância suave de longa duração para porta-copos ou painel.' },
+          { id: 'prod_3', nome: 'Cera Líquida Spray Carnaúba 500ml', precoVenda: 35.00, precoCusto: 16.00, estoque: 15, min: 3, categoria: 'Estética Automotiva', codigoBarras: '78910003', ativo: true, unidadeId: 'pitstop', descricao: 'Brilho espelhado e proteção hidrorrepelente para lataria.' },
+          { id: 'prod_4', nome: 'Pretinho de Pneu Pneu Pret 500ml', precoVenda: 25.00, precoCusto: 11.00, estoque: 18, min: 4, categoria: 'Estética Automotiva', codigoBarras: '78910004', ativo: true, unidadeId: 'pitstop', descricao: 'Brilho molhado para pneus sem respingar na lataria.' },
+          { id: 'prod_5', nome: 'Flanela Microfibra 40x40cm 300GSM', precoVenda: 12.00, precoCusto: 4.50, estoque: 30, min: 8, categoria: 'Acessórios', codigoBarras: '78910005', ativo: true, unidadeId: 'pitstop', descricao: 'Pano macio sem fiapos para acabamento e secagem.' },
+          { id: 'prod_6', nome: 'Silicone Gel Painel 200g', precoVenda: 22.00, precoCusto: 9.00, estoque: 14, min: 3, categoria: 'Estética Automotiva', codigoBarras: '78910006', ativo: true, unidadeId: 'pitstop', descricao: 'Proteção UV contra rachaduras e ressecamento de plásticos.' },
+          { id: 'prod_7', nome: 'Água Mineral Crystal 500ml', precoVenda: 4.00, precoCusto: 1.50, estoque: 48, min: 12, categoria: 'Conveniência', codigoBarras: '78910007', ativo: true, unidadeId: 'pitstop', descricao: 'Água gelada na área de espera do cliente.' },
+          { id: 'prod_8', nome: 'Refrigerante Coca-Cola Lata 350ml', precoVenda: 6.00, precoCusto: 2.80, estoque: 36, min: 10, categoria: 'Conveniência', codigoBarras: '78910008', ativo: true, unidadeId: 'pitstop', descricao: 'Refrigerante gelado para consumo na recepção.' },
+          { id: 'prod_9', nome: 'Energético Monster Energy 473ml', precoVenda: 12.00, precoCusto: 6.80, estoque: 24, min: 6, categoria: 'Conveniência', codigoBarras: '78910009', ativo: true, unidadeId: 'pitstop', descricao: 'Lata 473ml gelada.' }
+        ];
+      }
+
+      if (!Array.isArray(parsed.vendas)) {
+        parsed.vendas = [];
       }
 
       return parsed;
@@ -547,6 +567,160 @@ app.delete("/api/servicos/:id", (req, res) => {
   res.json({ success: true });
 });
 
+// --- PRODUTOS & ESTOQUE (PDV) ---
+app.get("/api/produtos", (req, res) => {
+  const unidadeId = req.query.unidadeId ? String(req.query.unidadeId).toLowerCase() : null;
+  const lista = dbMemory.produtos || [];
+  if (unidadeId) {
+    const filtrados = lista.filter((p: any) => {
+      const u = String(p.unidadeId || '').toLowerCase();
+      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+    });
+    return res.json(filtrados);
+  }
+  res.json(lista);
+});
+
+app.post("/api/produtos", (req, res) => {
+  const novo = req.body;
+  if (!novo.nome || novo.precoVenda === undefined) {
+    return res.status(400).json({ error: "Nome e preço de venda são obrigatórios" });
+  }
+
+  const id = novo.id || `prod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const precoDef = novo.preco !== undefined ? Number(novo.preco) : (Number(novo.precoVenda) || 0);
+  const formatado = {
+    ...novo,
+    id,
+    preco: precoDef,
+    precoVenda: novo.precoVenda !== undefined ? Number(novo.precoVenda) : precoDef,
+    precoCusto: novo.precoCusto !== undefined ? Number(novo.precoCusto) : 0,
+    estoque: novo.estoque !== undefined ? Number(novo.estoque) : 0,
+    min: novo.min !== undefined ? Number(novo.min) : 3,
+    categoria: novo.categoria || 'Geral',
+    codigoBarras: novo.codigoBarras ? String(novo.codigoBarras).trim() : '',
+    ativo: novo.ativo !== undefined ? Boolean(novo.ativo) : true,
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!Array.isArray(dbMemory.produtos)) dbMemory.produtos = [];
+  const idx = dbMemory.produtos.findIndex((p: any) => p.id === id);
+  if (idx >= 0) {
+    dbMemory.produtos[idx] = { ...dbMemory.produtos[idx], ...formatado };
+  } else {
+    dbMemory.produtos.unshift(formatado);
+  }
+
+  salvarBanco(dbMemory);
+
+  if (serverDb) {
+    setDoc(doc(serverDb, "produtos", id), formatado).catch(() => {});
+  }
+
+  res.status(201).json(formatado);
+});
+
+app.patch("/api/produtos/:id", (req, res) => {
+  const { id } = req.params;
+  if (!Array.isArray(dbMemory.produtos)) dbMemory.produtos = [];
+  const idx = dbMemory.produtos.findIndex((p: any) => p.id === id);
+  if (idx >= 0) {
+    dbMemory.produtos[idx] = {
+      ...dbMemory.produtos[idx],
+      ...req.body,
+      precoVenda: req.body.precoVenda !== undefined ? Number(req.body.precoVenda) : dbMemory.produtos[idx].precoVenda,
+      precoCusto: req.body.precoCusto !== undefined ? Number(req.body.precoCusto) : dbMemory.produtos[idx].precoCusto,
+      estoque: req.body.estoque !== undefined ? Number(req.body.estoque) : dbMemory.produtos[idx].estoque,
+      min: req.body.min !== undefined ? Number(req.body.min) : dbMemory.produtos[idx].min,
+      updatedAt: new Date().toISOString()
+    };
+    salvarBanco(dbMemory);
+
+    if (serverDb) {
+      setDoc(doc(serverDb, "produtos", id), dbMemory.produtos[idx], { merge: true }).catch(() => {});
+    }
+
+    return res.json(dbMemory.produtos[idx]);
+  }
+  res.status(404).json({ error: "Produto não encontrado" });
+});
+
+app.delete("/api/produtos/:id", (req, res) => {
+  const { id } = req.params;
+  if (!Array.isArray(dbMemory.produtos)) dbMemory.produtos = [];
+  dbMemory.produtos = dbMemory.produtos.filter((p: any) => p.id !== id);
+  salvarBanco(dbMemory);
+
+  if (serverDb) {
+    deleteDoc(doc(serverDb, "produtos", id)).catch(() => {});
+  }
+
+  res.json({ success: true });
+});
+
+// --- VENDAS DO PDV (FRENTE DE CAIXA) ---
+app.get("/api/vendas", (req, res) => {
+  const unidadeId = req.query.unidadeId ? String(req.query.unidadeId).toLowerCase() : null;
+  const lista = dbMemory.vendas || [];
+  if (unidadeId) {
+    const filtrados = lista.filter((v: any) => {
+      const u = String(v.unidadeId || '').toLowerCase();
+      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+    });
+    return res.json(filtrados);
+  }
+  res.json(lista);
+});
+
+app.post("/api/vendas", (req, res) => {
+  const novaVenda = req.body;
+  if (!novaVenda.itens || !Array.isArray(novaVenda.itens) || novaVenda.itens.length === 0) {
+    return res.status(400).json({ error: "Itens da venda são obrigatórios" });
+  }
+
+  const id = novaVenda.id || `venda_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const metodoPagamento = novaVenda.metodoPagamento || novaVenda.formaPagamento || 'dinheiro';
+  const vendaFormatada = {
+    ...novaVenda,
+    id,
+    subtotal: Number(novaVenda.subtotal) || 0,
+    desconto: Number(novaVenda.desconto) || 0,
+    total: Number(novaVenda.total) || 0,
+    metodoPagamento,
+    formaPagamento: metodoPagamento,
+    dataHora: novaVenda.dataHora || new Date().toLocaleString('pt-BR'),
+    data: novaVenda.data || new Date().toISOString().split('T')[0],
+    createdAt: new Date().toISOString()
+  };
+
+  if (!Array.isArray(dbMemory.vendas)) dbMemory.vendas = [];
+  dbMemory.vendas.unshift(vendaFormatada);
+
+  // Baixa automática no estoque de cada produto vendido
+  if (Array.isArray(dbMemory.produtos)) {
+    novaVenda.itens.forEach((item: any) => {
+      const pIdx = dbMemory.produtos?.findIndex((p: any) => p.id === item.produtoId);
+      if (pIdx !== undefined && pIdx >= 0 && dbMemory.produtos) {
+        const qtdVendida = Number(item.quantidade) || 1;
+        dbMemory.produtos[pIdx].estoque = Math.max(0, (Number(dbMemory.produtos[pIdx].estoque) || 0) - qtdVendida);
+        dbMemory.produtos[pIdx].updatedAt = new Date().toISOString();
+
+        if (serverDb) {
+          setDoc(doc(serverDb, "produtos", dbMemory.produtos[pIdx].id), dbMemory.produtos[pIdx], { merge: true }).catch(() => {});
+        }
+      }
+    });
+  }
+
+  salvarBanco(dbMemory);
+
+  if (serverDb) {
+    setDoc(doc(serverDb, "vendas", id), vendaFormatada).catch(() => {});
+  }
+
+  res.status(201).json(vendaFormatada);
+});
+
 // --- STATUS GERAL DE SINCRONIZAÇÃO ---
 app.get("/api/sync", (req, res) => {
   const unidadeId = req.query.unidadeId ? String(req.query.unidadeId).toLowerCase() : null;
@@ -556,6 +730,8 @@ app.get("/api/sync", (req, res) => {
   let unidades = dbMemory.lavaJatos;
   let banners = dbMemory.banners || [];
   let servicos = dbMemory.servicos || [];
+  let produtos = dbMemory.produtos || [];
+  let vendas = dbMemory.vendas || [];
 
   if (unidadeId) {
     clientes = clientes.filter(c => {
@@ -578,6 +754,14 @@ app.get("/api/sync", (req, res) => {
       const u = String(s.unidadeId || '').toLowerCase();
       return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
     });
+    produtos = produtos.filter((p: any) => {
+      const u = String(p.unidadeId || '').toLowerCase();
+      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+    });
+    vendas = vendas.filter((v: any) => {
+      const u = String(v.unidadeId || '').toLowerCase();
+      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+    });
   }
 
   res.json({
@@ -587,7 +771,9 @@ app.get("/api/sync", (req, res) => {
     fila,
     unidades,
     banners,
-    servicos
+    servicos,
+    produtos,
+    vendas
   });
 });
 

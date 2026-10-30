@@ -45,12 +45,14 @@ import {
 } from '../services/apiSync';
 import { BannerPromocional, ServicoLavaJato } from '../types';
 import { formatarCelular, formatarCEP } from '../utils/formatters';
+import { solicitarPermissaoPushFCM } from '../services/fcmPush';
 
 export interface UnidadeLavaJato {
   id: string;
   nomeFantasia: string;
   contato: string;
   corTematica: string;
+  logoUrl?: string;
 }
 
 export interface Cliente {
@@ -113,25 +115,108 @@ export default function AppClientePWA({
       try {
         const parsed = JSON.parse(salvos);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((item: any, idx: number) => ({
-            id: item.id || `unidade-${idx}`,
-            nomeFantasia: item.nomeFantasia || 'Lava Jato',
-            contato: item.contato || '(11) 99999-8888',
-            corTematica: item.corTematica || (idx % 2 === 0 ? 'blue' : 'emerald')
-          }));
+          return parsed.map((item: any, idx: number) => {
+            const uid = item.id || `unidade-${idx}`;
+            const logo = item.logoUrl || (typeof window !== 'undefined' ? localStorage.getItem(`hubwash_logo_${uid}`) : null) || undefined;
+            return {
+              id: uid,
+              nomeFantasia: item.nomeFantasia || 'Lava Jato',
+              contato: item.contato || '(11) 99999-8888',
+              corTematica: item.corTematica || (idx % 2 === 0 ? 'blue' : 'emerald'),
+              logoUrl: logo
+            };
+          });
         }
       } catch (e) {
         console.error(e);
       }
     }
     return [
-      { id: 'pitstop', nomeFantasia: 'Pit Stop Lava Jato', contato: '(11) 99999-8888', corTematica: 'blue' },
-      { id: 'ecowash', nomeFantasia: 'EcoWash Estética', contato: '(11) 97777-6666', corTematica: 'emerald' }
+      { id: 'pitstop', nomeFantasia: 'Pit Stop Lava Jato', contato: '(11) 99999-8888', corTematica: 'blue', logoUrl: (typeof window !== 'undefined' ? localStorage.getItem('hubwash_logo_pitstop') : null) || undefined },
+      { id: 'ecowash', nomeFantasia: 'EcoWash Estética', contato: '(11) 97777-6666', corTematica: 'emerald', logoUrl: (typeof window !== 'undefined' ? localStorage.getItem('hubwash_logo_ecowash') : null) || undefined }
     ];
   });
 
-  const [unidadeAtual, setUnidadeAtual] = useState<UnidadeLavaJato | null>(null);
-  const [carregandoUnidade, setCarregandoUnidade] = useState(true);
+  const [unidadeAtual, setUnidadeAtual] = useState<UnidadeLavaJato>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        const slugUnidadeDaURL = params.get('unidade');
+        if (slugUnidadeDaURL) {
+          const slugLimpo = slugUnidadeDaURL.toLowerCase().trim();
+          const unidadeLocalizada = bancoUnidades.find(
+            u => u.id.toLowerCase() === slugLimpo || u.nomeFantasia.toLowerCase() === slugLimpo
+          );
+          if (unidadeLocalizada) {
+            const logoSalvo = localStorage.getItem(`hubwash_logo_${unidadeLocalizada.id}`);
+            return {
+              ...unidadeLocalizada,
+              logoUrl: logoSalvo || unidadeLocalizada.logoUrl
+            };
+          }
+
+          const nomeFormatado = slugLimpo
+            .split(/[-_]/)
+            .filter(Boolean)
+            .map(p => p.charAt(0).toUpperCase() + p.slice(1))
+            .join(' ');
+          const nomeFinal = nomeFormatado.toLowerCase().includes('lava')
+            ? nomeFormatado
+            : `${nomeFormatado} Lava Jato`;
+
+          return {
+            id: slugLimpo,
+            nomeFantasia: nomeFinal,
+            contato: '(11) 99999-8888',
+            corTematica: 'blue',
+            logoUrl: localStorage.getItem(`hubwash_logo_${slugLimpo}`) || undefined
+          };
+        }
+
+        const inquilinoSalvo = localStorage.getItem('hubwash_inquilino_preferido');
+        if (inquilinoSalvo) {
+          const unidadeRecuperada = bancoUnidades.find(u => u.id.toLowerCase() === inquilinoSalvo.toLowerCase());
+          if (unidadeRecuperada) {
+            const logoSalvo = localStorage.getItem(`hubwash_logo_${unidadeRecuperada.id}`);
+            return {
+              ...unidadeRecuperada,
+              logoUrl: logoSalvo || unidadeRecuperada.logoUrl
+            };
+          }
+        }
+      }
+    } catch {}
+
+    if (unidadeNome) {
+      const uPadrao = bancoUnidades.find(
+        u => u.nomeFantasia.toLowerCase().includes(unidadeNome.toLowerCase()) ||
+             unidadeNome.toLowerCase().includes(u.id.toLowerCase())
+      );
+      if (uPadrao) {
+        const logoSalvo = typeof window !== 'undefined' ? localStorage.getItem(`hubwash_logo_${uPadrao.id}`) : null;
+        return {
+          ...uPadrao,
+          logoUrl: logoSalvo || uPadrao.logoUrl
+        };
+      }
+      const slugFallback = unidadeNome.toLowerCase().replace(/[^a-z0-9]/g, '-') || 'pitstop';
+      return {
+        id: slugFallback,
+        nomeFantasia: unidadeNome,
+        contato: '(11) 99999-8888',
+        corTematica: 'blue',
+        logoUrl: (typeof window !== 'undefined' ? localStorage.getItem(`hubwash_logo_${slugFallback}`) : null) || undefined
+      };
+    }
+
+    return bancoUnidades[0] || {
+      id: 'pitstop',
+      nomeFantasia: 'Pit Stop Lava Jato',
+      contato: '(11) 99999-8888',
+      corTematica: 'blue'
+    };
+  });
+  const [carregandoUnidade, setCarregandoUnidade] = useState(false);
 
   // ID Padronizado da Unidade (calculado a partir de unidadeAtual ou fallback)
   const unidadeIdNormalizada = useMemo(() => {
@@ -143,6 +228,45 @@ export default function AppClientePWA({
       .replace(/-+/g, '-')
       .replace(/^-|-$/g, '') || 'pitstop';
   }, [unidadeAtual, unidadeNome]);
+
+  // Sincronização dinâmica do logotipo exclusivo da unidade em tempo real
+  useEffect(() => {
+    const atualizarLogo = (e?: any) => {
+      try {
+        const idAlvo = e?.detail?.unidadeId || unidadeAtual?.id || unidadeIdNormalizada;
+        const logo = e?.detail?.logoUrl !== undefined 
+          ? e.detail.logoUrl 
+          : (localStorage.getItem(`hubwash_logo_${idAlvo}`) || undefined);
+        if (logo !== undefined) {
+          setUnidadeAtual(prev => ({ ...prev, logoUrl: logo }));
+        }
+      } catch {}
+    };
+
+    window.addEventListener('hubwash_logo_alterado', atualizarLogo);
+    window.addEventListener('storage', atualizarLogo);
+
+    let unsubUnidade: (() => void) | null = null;
+    if (db && (unidadeAtual?.id || unidadeIdNormalizada)) {
+      try {
+        const targetId = unidadeAtual?.id || unidadeIdNormalizada;
+        unsubUnidade = onSnapshot(doc(db, 'unidades', targetId), (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data.logoUrl !== undefined) {
+              setUnidadeAtual(prev => ({ ...prev, logoUrl: data.logoUrl }));
+            }
+          }
+        }, () => {});
+      } catch {}
+    }
+
+    return () => {
+      window.removeEventListener('hubwash_logo_alterado', atualizarLogo);
+      window.removeEventListener('storage', atualizarLogo);
+      if (unsubUnidade) unsubUnidade();
+    };
+  }, [unidadeAtual?.id, unidadeIdNormalizada]);
 
   // Banco de clientes persistente amarrado às unidades
   const [bancoClientes, setBancoClientes] = useState<Cliente[]>(() => {
@@ -197,10 +321,15 @@ export default function AppClientePWA({
   useEffect(() => {
     if (usuarioLogado) {
       localStorage.setItem('hubwash_cliente_sessao', JSON.stringify(usuarioLogado));
+      // Se o usuário já tiver permissão concedida no navegador, sincroniza o token FCM silenciosamente
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        const idCli = usuarioLogado.email || usuarioLogado.contato || usuarioLogado.nome || 'cliente';
+        solicitarPermissaoPushFCM(idCli, undefined, unidadeAtual?.id).catch(() => {});
+      }
     } else {
       localStorage.removeItem('hubwash_cliente_sessao');
     }
-  }, [usuarioLogado]);
+  }, [usuarioLogado, unidadeAtual?.id]);
 
   const [telaAtiva, setTelaAtiva] = useState<'cadastro' | 'login' | 'home' | 'agendar' | 'fidelidade'>(() => {
     // 1. Prioridade máxima: verificação explícita do telaInicial repassado pelo App.tsx
@@ -707,8 +836,14 @@ export default function AppClientePWA({
 
             setBancoClientes(prev => {
               const mapa = new Map<string, Cliente>();
-              prev.forEach(c => mapa.set(`${c.email.toLowerCase()}_${c.unidadeVinculadaId}`, c));
-              clisFormatados.forEach(c => mapa.set(`${c.email.toLowerCase()}_${c.unidadeVinculadaId}`, c));
+              prev.forEach(c => {
+                const emailKey = String(c?.email || c?.nome || 'cliente').toLowerCase();
+                mapa.set(`${emailKey}_${c?.unidadeVinculadaId || ''}`, c);
+              });
+              clisFormatados.forEach(c => {
+                const emailKey = String(c?.email || c?.nome || 'cliente').toLowerCase();
+                mapa.set(`${emailKey}_${c?.unidadeVinculadaId || ''}`, c);
+              });
               return Array.from(mapa.values());
             });
 
@@ -716,8 +851,8 @@ export default function AppClientePWA({
             setUsuarioLogado(atual => {
               if (!atual) return null;
               const cliAtualizado = clisFormatados.find(
-                c => c.email.toLowerCase() === atual.email.toLowerCase() || 
-                     (atual.contato && c.contato && c.contato.replace(/\D/g, '') === atual.contato.replace(/\D/g, ''))
+                c => (c.email && atual.email && String(c.email).toLowerCase() === String(atual.email).toLowerCase()) || 
+                     (atual.contato && c.contato && String(c.contato).replace(/\D/g, '') === String(atual.contato).replace(/\D/g, ''))
               );
               if (cliAtualizado && cliAtualizado.pontosFidelidade !== atual.pontosFidelidade) {
                 return { ...atual, pontosFidelidade: cliAtualizado.pontosFidelidade };
@@ -963,16 +1098,22 @@ export default function AppClientePWA({
             if (clientesFirestore.length > 0) {
               setBancoClientes((prev) => {
                 const mapa = new Map<string, Cliente>();
-                prev.forEach((c) => mapa.set(`${c.email.toLowerCase()}_${c.unidadeVinculadaId}`, c));
-                clientesFirestore.forEach((c) => mapa.set(`${c.email.toLowerCase()}_${c.unidadeVinculadaId}`, c));
+                prev.forEach((c) => {
+                  const emailKey = String(c?.email || c?.nome || 'cliente').toLowerCase();
+                  mapa.set(`${emailKey}_${c?.unidadeVinculadaId || ''}`, c);
+                });
+                clientesFirestore.forEach((c) => {
+                  const emailKey = String(c?.email || c?.nome || 'cliente').toLowerCase();
+                  mapa.set(`${emailKey}_${c?.unidadeVinculadaId || ''}`, c);
+                });
                 return Array.from(mapa.values());
               });
 
               setUsuarioLogado((atual) => {
                 if (!atual) return null;
                 const cliAtualizado = clientesFirestore.find(
-                  (c) => c.email.toLowerCase() === atual.email.toLowerCase() || 
-                         (atual.contato && c.contato && c.contato.replace(/\D/g, '') === atual.contato.replace(/\D/g, ''))
+                  (c) => (c.email && atual.email && String(c.email).toLowerCase() === String(atual.email).toLowerCase()) || 
+                         (atual.contato && c.contato && String(c.contato).replace(/\D/g, '') === String(atual.contato).replace(/\D/g, ''))
                 );
                 if (cliAtualizado && cliAtualizado.pontosFidelidade !== atual.pontosFidelidade) {
                   return { ...atual, pontosFidelidade: cliAtualizado.pontosFidelidade };
@@ -1011,8 +1152,8 @@ export default function AppClientePWA({
     }
 
     const clienteExistente = bancoClientes.find(c => 
-      c.email.toLowerCase() === cadEmail.trim().toLowerCase() && 
-      (c.unidadeVinculadaId === unidadeIdNormalizada || c.unidadeVinculadaId === unidadeAtual.id)
+      c.email && String(c.email).toLowerCase() === cadEmail.trim().toLowerCase() && 
+      (c.unidadeVinculadaId === unidadeIdNormalizada || (unidadeAtual && c.unidadeVinculadaId === unidadeAtual.id))
     );
 
     if (clienteExistente) {
@@ -1051,7 +1192,7 @@ export default function AppClientePWA({
       // 💾 Persistência imediata do Usuário Logado na sessão do celular e transição instantânea
       localStorage.setItem('hubwash_cliente_sessao', JSON.stringify(novoCliente));
       setUsuarioLogado(novoCliente);
-      setBancoClientes(prev => [...prev.filter(c => c.email.toLowerCase() !== novoCliente.email.toLowerCase()), novoCliente]);
+      setBancoClientes(prev => [...prev.filter(c => String(c.email || '').toLowerCase() !== String(novoCliente.email || '').toLowerCase()), novoCliente]);
 
       // 🛑 Transição instantânea para a Home (sem travar nem exigir 3 cliques)
       setTelaAtiva('home');
@@ -1172,11 +1313,11 @@ export default function AppClientePWA({
     // Permite login por E-mail, Nome ou WhatsApp
     let clienteLocalizado = bancoClientes.find(
       c =>
-        (c.email.toLowerCase() === termoLimpo ||
-         c.nome.toLowerCase() === termoLimpo ||
-         (termoNumeros.length >= 8 && c.contato.replace(/\D/g, '').includes(termoNumeros))) &&
+        ((c.email && String(c.email).toLowerCase() === termoLimpo) ||
+         (c.nome && String(c.nome).toLowerCase() === termoLimpo) ||
+         (termoNumeros.length >= 8 && c.contato && String(c.contato).replace(/\D/g, '').includes(termoNumeros))) &&
         (c.senhaAcesso === senhaLimpa || !c.senhaAcesso || senhaLimpa.length >= 4) &&
-        (c.unidadeVinculadaId === unidadeIdNormalizada || c.unidadeVinculadaId === unidadeAtual.id || !c.unidadeVinculadaId)
+        (c.unidadeVinculadaId === unidadeIdNormalizada || (unidadeAtual && c.unidadeVinculadaId === unidadeAtual.id) || !c.unidadeVinculadaId)
     );
 
     // Fallback: busca nos clientes sincronizados do lava jato
@@ -1186,16 +1327,16 @@ export default function AppClientePWA({
         if (salvosFid) {
           const lista = JSON.parse(salvosFid);
           const achado = Array.isArray(lista) && lista.find((c: any) =>
-            (c.email && c.email.toLowerCase() === termoLimpo) ||
-            (c.nome && c.nome.toLowerCase() === termoLimpo) ||
-            (termoNumeros.length >= 8 && c.telefone && c.telefone.replace(/\D/g, '').includes(termoNumeros))
+            (c.email && String(c.email).toLowerCase() === termoLimpo) ||
+            (c.nome && String(c.nome).toLowerCase() === termoLimpo) ||
+            (termoNumeros.length >= 8 && c.telefone && String(c.telefone).replace(/\D/g, '').includes(termoNumeros))
           );
           if (achado) {
             clienteLocalizado = {
               nome: achado.nome,
               email: achado.email || `${termoLimpo}@cliente.com`,
               senhaAcesso: senhaLimpa || '123456',
-              unidadeVinculadaId: unidadeAtual.id,
+              unidadeVinculadaId: unidadeAtual?.id || unidadeIdNormalizada,
               contato: achado.telefone || '(11) 99999-0000',
               cep: '01001-000',
               cidade: 'São Paulo',
@@ -1209,7 +1350,7 @@ export default function AppClientePWA({
               cor: 'Prata',
               pontosFidelidade: achado.pontos || 0
             };
-            setBancoClientes(prev => [...prev.filter(c => c.email.toLowerCase() !== clienteLocalizado!.email.toLowerCase()), clienteLocalizado!]);
+            setBancoClientes(prev => [...prev.filter(c => String(c.email || '').toLowerCase() !== String(clienteLocalizado?.email || '').toLowerCase()), clienteLocalizado!]);
           }
         }
       } catch {}
@@ -1699,14 +1840,12 @@ export default function AppClientePWA({
         <header className="bg-slate-950 border-b border-slate-800/80 px-4 py-3 flex items-center justify-between sticky top-0 z-40">
           <div className="flex items-center gap-2">
             <img
-              src="/logo.png"
-              alt="Logo"
+              src={unidadeAtual.logoUrl || "/logo.png"}
+              alt={unidadeAtual.nomeFantasia}
               onError={(e) => {
                 const target = e.currentTarget;
-                if (target.src.endsWith('/logo.png')) {
-                  target.src = '/pwa-512x512.png';
-                } else if (target.src.endsWith('/pwa-512x512.png')) {
-                  target.src = '/hubwash.png';
+                if (target.src !== '/logo.png') {
+                  target.src = '/logo.png';
                 } else {
                   target.style.display = 'none';
                 }
@@ -1783,19 +1922,17 @@ export default function AppClientePWA({
               <div className="text-center space-y-1">
                 <div className="flex justify-center mb-1">
                   <img
-                    src="/logo.png"
-                    alt="Logo"
+                    src={unidadeAtual.logoUrl || "/logo.png"}
+                    alt={unidadeAtual.nomeFantasia}
                     onError={(e) => {
                       const target = e.currentTarget;
-                      if (target.src.endsWith('/logo.png')) {
-                        target.src = '/pwa-512x512.png';
-                      } else if (target.src.endsWith('/pwa-512x512.png')) {
-                        target.src = '/hubwash.png';
+                      if (target.src !== '/logo.png') {
+                        target.src = '/logo.png';
                       } else {
                         target.style.display = 'none';
                       }
                     }}
-                    className="h-16 w-auto max-w-[200px] object-contain drop-shadow-md"
+                    className="h-16 w-auto max-w-[200px] object-contain drop-shadow-md rounded-xl"
                   />
                 </div>
                 <h2 className="text-base font-black text-white">Criar Novo Perfil</h2>
@@ -2056,19 +2193,17 @@ export default function AppClientePWA({
               <div className="text-center space-y-1">
                 <div className="flex justify-center mb-1">
                   <img
-                    src="/logo.png"
-                    alt="Logo"
+                    src={unidadeAtual.logoUrl || "/logo.png"}
+                    alt={unidadeAtual.nomeFantasia}
                     onError={(e) => {
                       const target = e.currentTarget;
-                      if (target.src.endsWith('/logo.png')) {
-                        target.src = '/pwa-512x512.png';
-                      } else if (target.src.endsWith('/pwa-512x512.png')) {
-                        target.src = '/hubwash.png';
+                      if (target.src !== '/logo.png') {
+                        target.src = '/logo.png';
                       } else {
                         target.style.display = 'none';
                       }
                     }}
-                    className="h-16 w-auto max-w-[200px] object-contain drop-shadow-md"
+                    className="h-16 w-auto max-w-[200px] object-contain drop-shadow-md rounded-xl"
                   />
                 </div>
                 <div className="w-12 h-12 rounded-2xl bg-blue-600/20 border border-blue-500/30 text-blue-400 flex items-center justify-center mx-auto shadow-lg">
@@ -2302,6 +2437,34 @@ export default function AppClientePWA({
                 <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-1 rounded-lg font-mono">
                   {unidadeAtual.id}
                 </span>
+              </div>
+
+              {/* Card para Ativar Notificações Push com a chave VAPID */}
+              <div className="bg-gradient-to-r from-blue-950/40 via-slate-900 to-cyan-950/40 border border-blue-500/30 rounded-2xl p-3 flex items-center justify-between shadow-lg">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-full bg-blue-500/20 text-cyan-400 flex items-center justify-center shrink-0">
+                    <Bell size={16} />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white leading-tight">Notificações no Celular</h4>
+                    <p className="text-[10px] text-slate-300">Avisar quando o veículo for para o box e ficar pronto</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const idCli = usuarioLogado.email || usuarioLogado.contato || usuarioLogado.nome || 'cliente';
+                    const res = await solicitarPermissaoPushFCM(idCli, undefined, unidadeAtual.id);
+                    if (res.sucesso) {
+                      mostrarToast('🔔 Notificações push ativadas no seu aparelho!', 'sucesso');
+                    } else {
+                      mostrarToast(res.erro || 'Não foi possível ativar notificações.', 'erro');
+                    }
+                  }}
+                  className="py-1.5 px-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-[11px] transition shadow-md shrink-0 cursor-pointer"
+                >
+                  Ativar Push
+                </button>
               </div>
 
               {/* ========================================== */}

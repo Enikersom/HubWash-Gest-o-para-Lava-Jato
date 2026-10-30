@@ -74,12 +74,16 @@ export default function RelatorioFinanceiro({
     }
 
     // 1. Contabiliza atendimentos da fila de hoje
-    const totalHojeFila = filaAtendimentos.filter(f => f.status === 'Pronto' || f.status === 'Entregue' || f.status === 'Lavando');
-    const valorHojeFila = totalHojeFila.reduce((acc, curr) => acc + (curr.valor || 0), 0);
+    const listaFila = Array.isArray(filaAtendimentos) ? filaAtendimentos : [];
+    const listaAgendamentos = Array.isArray(agendamentos) ? agendamentos : [];
+    const listaMovimentacoes = Array.isArray(movimentacoes) ? movimentacoes : [];
+
+    const totalHojeFila = listaFila.filter(f => f && (f.status === 'Pronto' || f.status === 'Entregue' || f.status === 'Lavando'));
+    const valorHojeFila = totalHojeFila.reduce((acc, curr) => acc + (Number(curr?.valor) || 0), 0);
 
     // 2. Contabiliza agendamentos concluídos
-    agendamentos.forEach(ag => {
-      if (ag.status === 'Concluido' || ag.status === 'Confirmado') {
+    listaAgendamentos.forEach(ag => {
+      if (ag && (ag.status === 'Concluido' || ag.status === 'Confirmado')) {
         const item = listaDias.find(d => d.dataISO === ag.data);
         if (item) {
           item.atendimentos += 1;
@@ -89,13 +93,13 @@ export default function RelatorioFinanceiro({
     });
 
     // 3. Contabiliza movimentações de caixa do tipo 'entrada'
-    movimentacoes.forEach(m => {
-      if (m.tipo === 'entrada') {
+    listaMovimentacoes.forEach(m => {
+      if (m && m.tipo === 'entrada') {
         // Tenta associar por data se informada
         if (m.data === 'Hoje' || m.data === new Date().toLocaleDateString('pt-BR')) {
           const ultimoDia = listaDias[listaDias.length - 1];
           if (ultimoDia) {
-            ultimoDia.faturamento += m.valor;
+            ultimoDia.faturamento += Number(m.valor) || 0;
           }
         }
       }

@@ -60,7 +60,8 @@
         "dataCriacao": { "type": "string" },
         "dataExpiracao": { "type": "string" },
         "statusPlano": { "type": "string", "enum": ["ativo", "teste", "vitalicio", "bloqueado"] },
-        "tipoPlano": { "type": "string", "enum": ["mensal", "anual", "vitalicio"] }
+        "tipoPlano": { "type": "string", "enum": ["mensal", "anual", "vitalicio"] },
+        "logoUrl": { "type": "string" }
       },
       "required": ["id", "nomeFantasia", "senhaProvisoria", "statusPlano"]
     },
@@ -105,6 +106,8 @@
         "veiculo": { "type": "string" },
         "placa": { "type": "string" },
         "cliente": { "type": "string" },
+        "tipoVeiculo": { "type": "string", "enum": ["passeio", "suv", "caminhonete", "caminhao_cacamba", "caminhao", "moto", "van_onibus"] },
+        "pontosAvarias": { "type": "array" },
         "avarias": { "type": "string" },
         "fotos": { "type": "number" },
         "nivelCombustivel": { "type": "string" },
@@ -113,6 +116,63 @@
         "unidadeId": { "type": "string" }
       },
       "required": ["veiculo", "placa", "data"]
+    },
+    "Produto": {
+      "title": "Produto",
+      "description": "Produtos cadastrados para venda no PDV e controle de estoque do lava-jato",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nome": { "type": "string", "maxLength": 150 },
+        "preco": { "type": "number", "minimum": 0 },
+        "precoVenda": { "type": "number", "minimum": 0 },
+        "precoCusto": { "type": "number", "minimum": 0 },
+        "estoque": { "type": "number", "minimum": 0 },
+        "min": { "type": "number", "minimum": 0 },
+        "categoria": { "type": "string", "maxLength": 100 },
+        "codigoBarras": { "type": "string", "maxLength": 100 },
+        "unidadeId": { "type": "string", "maxLength": 100 },
+        "ativo": { "type": "boolean" },
+        "descricao": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["nome", "preco", "estoque", "categoria"]
+    },
+    "Venda": {
+      "title": "Venda",
+      "description": "Vendas registradas no PDV (Frente de Caixa)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "unidadeId": { "type": "string", "maxLength": 100 },
+        "itens": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "produtoId": { "type": "string" },
+              "nome": { "type": "string" },
+              "quantidade": { "type": "number" },
+              "precoUnitario": { "type": "number" },
+              "subtotal": { "type": "number" },
+              "categoria": { "type": "string" }
+            },
+            "required": ["produtoId", "nome", "quantidade", "precoUnitario", "subtotal"]
+          }
+        },
+        "total": { "type": "number", "minimum": 0 },
+        "data": { "type": "string" },
+        "metodoPagamento": { "type": "string", "enum": ["dinheiro", "pix", "debito", "credito", "fiado"] },
+        "formaPagamento": { "type": "string", "enum": ["dinheiro", "pix", "debito", "credito", "fiado"] },
+        "subtotal": { "type": "number" },
+        "desconto": { "type": "number" },
+        "clienteNome": { "type": "string" },
+        "veiculoPlaca": { "type": "string" },
+        "operador": { "type": "string" },
+        "valorRecebido": { "type": "number" },
+        "troco": { "type": "number" },
+        "dataHora": { "type": "string" }
+      },
+      "required": ["itens", "total", "data", "metodoPagamento"]
     }
   },
   "firestore": {
@@ -139,6 +199,14 @@
     "/checklists/{checklistId}": {
       "schema": { "$ref": "#/entities/Checklist" },
       "description": "Coleção de vistorias e checklists com fotos"
+    },
+    "/produtos/{produtoId}": {
+      "schema": { "$ref": "#/entities/Produto" },
+      "description": "Coleção de produtos e estoque para venda no PDV"
+    },
+    "/vendas/{vendaId}": {
+      "schema": { "$ref": "#/entities/Venda" },
+      "description": "Coleção de vendas realizadas no PDV"
     }
   }
 }

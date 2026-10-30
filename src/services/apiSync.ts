@@ -374,3 +374,96 @@ export async function excluirServicoServidor(id: string): Promise<boolean> {
   }
 }
 
+// --- PRODUTOS (PDV & ESTOQUE) ---
+export async function buscarProdutosServidor(unidadeId?: string): Promise<any[]> {
+  try {
+    const url = unidadeId ? `/api/produtos?unidadeId=${encodeURIComponent(unidadeId)}` : '/api/produtos';
+    const res = await fetchApiSegura(url, {
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store'
+    });
+    if (res) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Fallback buscar produtos:', err);
+  }
+  return [];
+}
+
+export async function salvarProdutoServidor(produto: any): Promise<any | null> {
+  try {
+    const res = await fetchApiSegura('/api/produtos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(produto)
+    });
+    if (res) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Erro ao salvar produto no servidor:', err);
+  }
+  return null;
+}
+
+export async function atualizarProdutoServidor(id: string, dados: any): Promise<any | null> {
+  try {
+    const res = await fetchApiSegura(`/api/produtos/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(dados)
+    });
+    if (res) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Erro ao atualizar produto no servidor:', err);
+  }
+  return null;
+}
+
+export async function excluirProdutoServidor(id: string): Promise<boolean> {
+  try {
+    const res = await fetchApiSegura(`/api/produtos/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    return Boolean(res);
+  } catch (err) {
+    return false;
+  }
+}
+
+// --- VENDAS DO PDV (FRENTE DE CAIXA) ---
+export async function buscarVendasServidor(unidadeId?: string): Promise<any[]> {
+  try {
+    const url = unidadeId ? `/api/vendas?unidadeId=${encodeURIComponent(unidadeId)}` : '/api/vendas';
+    const res = await fetchApiSegura(url, {
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store'
+    });
+    if (res) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Fallback buscar vendas:', err);
+  }
+  return [];
+}
+
+export async function salvarVendaServidor(venda: any): Promise<any | null> {
+  try {
+    const res = await fetchApiSegura('/api/vendas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(venda)
+    });
+    if (res) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Erro ao salvar venda no servidor:', err);
+  }
+  return null;
+}
+

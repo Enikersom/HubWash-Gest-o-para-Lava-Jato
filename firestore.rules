@@ -42,6 +42,16 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // 📦 PRODUTOS & ESTOQUE
+    match /produtos/{produtoId} {
+      allow read, write: if true;
+    }
+
+    // 🛒 VENDAS DO PDV (FRENTE DE CAIXA)
+    match /vendas/{vendaId} {
+      allow read, write: if true;
+    }
+
     // 🛑 BLOQUEIO PADRÃO: Impede criação de coleções desconhecidas
     match /{document=**} {
       allow read, write: if false;

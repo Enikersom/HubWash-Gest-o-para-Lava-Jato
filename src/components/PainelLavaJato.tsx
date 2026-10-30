@@ -52,7 +52,8 @@ import {
   Tag,
   Edit3,
   Crown,
-  Infinity
+  Infinity,
+  Store
 } from 'lucide-react';
 import { db, collection, addDoc, setDoc, onSnapshot, doc, updateDoc, deleteDoc, query, where, orderBy, getDocs, getFirebaseStatus, salvarFirebaseConfig } from '../firebase';
 import { 
@@ -69,9 +70,16 @@ import {
   salvarServicoServidor,
   atualizarServicoServidor,
   excluirServicoServidor,
+  buscarProdutosServidor,
+  salvarProdutoServidor,
+  atualizarProdutoServidor,
+  excluirProdutoServidor,
+  buscarVendasServidor,
+  salvarVendaServidor,
   isApiServidorDisponivel
 } from '../services/apiSync';
-import { URL_BASE_NETLIFY } from '../App';
+import { URL_BASE_NETLIFY } from '../constants';
+import { enviarNotificacaoPushNetlify } from '../services/fcmPush';
 import {
   ItemFila,
   Funcionario,
@@ -82,10 +90,13 @@ import {
   BannerPromocional,
   AgendamentoPWA,
   ServicoLavaJato,
-  LavaJato
+  LavaJato,
+  VendaPDV
 } from '../types';
 import RelatorioFinanceiro from './RelatorioFinanceiro';
 import SistemaChecklist from './SistemaChecklist';
+import ModuloPDV from './ModuloPDV';
+import ModuloProdutos from './ModuloProdutos';
 import { formatarCelular, formatarCEP } from '../utils/formatters';
 
 interface PainelLavaJatoProps {
@@ -100,7 +111,7 @@ export default function PainelLavaJato({
   // CONFIGURAÇÃO DO MENU LATERAL RECOLHÍVEL
   const [sidebarAberta, setSidebarAberta] = useState(true);
   const [abaAtiva, setAbaAtiva] = useState<
-    'fila' | 'agendamentos' | 'servicos' | 'checklist' | 'relatorio' | 'clientes' | 'funcionarios' | 'produtos' | 'caixa' | 'banner' | 'configuracao'
+    'fila' | 'pdv' | 'agendamentos' | 'servicos' | 'checklist' | 'relatorio' | 'caixa' | 'produtos' | 'clientes' | 'funcionarios' | 'banner' | 'configuracao'
   >('fila');
 
   // CONTROLADORES DE CORES PARA PERSONALIZAÇÃO DO APP
@@ -129,6 +140,76 @@ export default function PainelLavaJato({
     } catch {}
     return '';
   });
+
+  // LOGOTIPO PERSONALIZADO DA EMPRESA (INDIVIDUAL PARA ESTA UNIDADE, SEM AFETAR O ADMIN GERAL)
+  const [logoLavaJato, setLogoLavaJato] = useState<string>(() => {
+    try {
+      const slug = (unidadeNome || 'pitstop').toLowerCase().trim();
+      const salvoLogo = localStorage.getItem(`hubwash_logo_${slug}`);
+      if (salvoLogo) return salvoLogo;
+      const salvos = localStorage.getItem('hubwash_lava_jatos');
+      if (salvos) {
+        const lista = JSON.parse(salvos);
+        const u = lista.find((x: any) => String(x.id).toLowerCase() === slug || String(x.nomeFantasia).toLowerCase() === slug);
+        if (u && u.logoUrl) return u.logoUrl;
+      }
+    } catch {}
+    return '';
+  });
+  const fileInputLogoRef = useRef<HTMLInputElement | null>(null);
+
+  const handleUploadLogo = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      mostrarToast('Por favor, selecione um arquivo de imagem válido (PNG, JPG, SVG, WebP).', 'erro');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target?.result as string;
+      if (!result) return;
+
+      if (file.type.includes('svg')) {
+        setLogoLavaJato(result);
+        mostrarToast('Logotipo SVG carregado com sucesso! Clique em "Salvar Alterações" para confirmar.', 'sucesso');
+        return;
+      }
+
+      const img = new Image();
+      img.src = result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const maxDimension = 500;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const formato = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+          const compactado = canvas.toDataURL(formato, 0.9);
+          setLogoLavaJato(compactado);
+          mostrarToast('Novo logotipo da empresa selecionado! Clique em "Salvar Alterações" para confirmar.', 'sucesso');
+        }
+      };
+    };
+    reader.readAsDataURL(file);
+  };
 
   // ESTADO DE FEEDBACK (TOAST & MODAL DE CONFIRMAÇÃO DE EXCLUSÃO)
   const [toast, setToast] = useState<{ mensagem: string; tipo: 'sucesso' | 'erro' | 'info' } | null>(null);
@@ -211,20 +292,62 @@ export default function PainelLavaJato({
   }, [checklists]);
 
   // ==========================================
-  // 5. PRODUTOS / ESTOQUE INTERNO
+  // 5. PRODUTOS & ESTOQUE (PDV E INSUMOS)
   // ==========================================
+  const PRODUTOS_PADRAO_LAVA_JATO: ProdutoEstoque[] = [
+    { id: 'prod_1', nome: 'Aromatizante Little Trees Black Ice', precoVenda: 15.00, precoCusto: 6.50, estoque: 28, min: 5, categoria: 'Aromatizantes', codigoBarras: '761710001', ativo: true },
+    { id: 'prod_2', nome: 'Aromatizante Gel Centralsul Tutti-Frutti', precoVenda: 12.00, precoCusto: 4.80, estoque: 15, min: 4, categoria: 'Aromatizantes', codigoBarras: '789823401', ativo: true },
+    { id: 'prod_3', nome: 'Cera Carnaúba Express Vonixx 500ml', precoVenda: 45.00, precoCusto: 24.00, estoque: 8, min: 3, categoria: 'Ceras e Polimentos', codigoBarras: '789851101', ativo: true },
+    { id: 'prod_4', nome: 'Pretinho Pneu Pret Vonixx 500ml', precoVenda: 28.00, precoCusto: 13.50, estoque: 12, min: 4, categoria: 'Pneus e Rodas', codigoBarras: '789851102', ativo: true },
+    { id: 'prod_5', nome: 'Pano Microfibra 40x40cm 350GSM', precoVenda: 15.00, precoCusto: 5.50, estoque: 40, min: 10, categoria: 'Acessórios', codigoBarras: '789000105', ativo: true },
+    { id: 'prod_6', nome: 'Silicone Gel Automotivo 200g', precoVenda: 20.00, precoCusto: 8.50, estoque: 10, min: 3, categoria: 'Interior', codigoBarras: '789000106', ativo: true },
+    { id: 'prod_7', nome: 'Água Mineral sem Gás 500ml', precoVenda: 4.00, precoCusto: 1.20, estoque: 35, min: 10, categoria: 'Bebidas e Snacks', codigoBarras: '789100007', ativo: true },
+    { id: 'prod_8', nome: 'Refrigerante Coca-Cola Lata 350ml', precoVenda: 6.00, precoCusto: 2.80, estoque: 24, min: 8, categoria: 'Bebidas e Snacks', codigoBarras: '789100008', ativo: true },
+    { id: 'prod_9', nome: 'Energético Monster Energy 473ml', precoVenda: 12.00, precoCusto: 6.90, estoque: 16, min: 5, categoria: 'Bebidas e Snacks', codigoBarras: '789100009', ativo: true }
+  ];
+
   const [produtos, setProdutos] = useState<ProdutoEstoque[]>(() => {
-    const salvos = localStorage.getItem('hubwash_produtos');
-    return salvos ? JSON.parse(salvos) : [];
+    try {
+      const salvos = localStorage.getItem('hubwash_produtos');
+      if (salvos) {
+        const lista = JSON.parse(salvos);
+        if (Array.isArray(lista) && lista.length > 0) {
+          return lista.map((p: any) => ({
+            ...p,
+            precoVenda: typeof p.precoVenda === 'number' ? p.precoVenda : (parseFloat(p.precoVenda) || 15.00),
+            precoCusto: typeof p.precoCusto === 'number' ? p.precoCusto : (parseFloat(p.precoCusto) || 7.00),
+            estoque: typeof p.estoque === 'number' ? p.estoque : (parseInt(p.estoque) || 10),
+            min: typeof p.min === 'number' ? p.min : (parseInt(p.min) || 3),
+            categoria: p.categoria || 'Geral',
+            ativo: p.ativo !== false
+          }));
+        }
+      }
+    } catch {}
+    return PRODUTOS_PADRAO_LAVA_JATO;
   });
-  const [novoProdNome, setNovoProdNome] = useState('');
-  const [novoProdQtd, setNovoProdQtd] = useState('10');
-  const [novoProdMin, setNovoProdMin] = useState('3');
-  const [novoProdCat, setNovoProdCat] = useState('Geral');
 
   useEffect(() => {
-    localStorage.setItem('hubwash_produtos', JSON.stringify(produtos));
+    try {
+      localStorage.setItem('hubwash_produtos', JSON.stringify(produtos));
+    } catch {}
   }, [produtos]);
+
+  // Vendas PDV (Frente de Caixa)
+  const [vendasPDV, setVendasPDV] = useState<VendaPDV[]>(() => {
+    try {
+      const salvos = localStorage.getItem('hubwash_vendas_pdv');
+      return salvos ? JSON.parse(salvos) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('hubwash_vendas_pdv', JSON.stringify(vendasPDV));
+    } catch {}
+  }, [vendasPDV]);
 
   // ==========================================
   // 6. CLIENTES & FIDELIDADE
@@ -386,7 +509,10 @@ export default function PainelLavaJato({
                 String(u.nomeFantasia).toLowerCase() === alias
               )
             );
-            if (encontrada) setUnidadeInfo(encontrada);
+            if (encontrada) {
+              setUnidadeInfo(encontrada);
+              if (encontrada.logoUrl) setLogoLavaJato(encontrada.logoUrl);
+            }
           }
         }
       } catch {}
@@ -402,6 +528,7 @@ export default function PainelLavaJato({
           if (docSnap.exists()) {
             const dados = docSnap.data() as LavaJato;
             setUnidadeInfo(dados);
+            if (dados.logoUrl) setLogoLavaJato(dados.logoUrl);
           }
         }, () => {});
       } catch {}
@@ -770,6 +897,35 @@ export default function PainelLavaJato({
             return Array.from(mapa.values());
           });
         }
+
+        if (dados.produtos && Array.isArray(dados.produtos) && dados.produtos.length > 0) {
+          setProdutos((prev) => {
+            const mapa = new Map<string, ProdutoEstoque>();
+            prev.forEach((p) => mapa.set(p.id, p));
+            dados.produtos.forEach((p: any) => {
+              if (!idsExcluidosRef.current.has(p.id)) {
+                mapa.set(p.id, {
+                  ...p,
+                  precoVenda: Number(p.precoVenda) || 0,
+                  precoCusto: Number(p.precoCusto) || 0,
+                  estoque: Number(p.estoque) || 0,
+                  min: Number(p.min) || 0,
+                  ativo: p.ativo !== false
+                });
+              }
+            });
+            return Array.from(mapa.values());
+          });
+        }
+
+        if (dados.vendas && Array.isArray(dados.vendas) && dados.vendas.length > 0) {
+          setVendasPDV((prev) => {
+            const mapa = new Map<string, VendaPDV>();
+            prev.forEach((v) => mapa.set(v.id, v));
+            dados.vendas.forEach((v: any) => mapa.set(v.id, v));
+            return Array.from(mapa.values());
+          });
+        }
       } catch (err) {
         // Fallback silencioso
       }
@@ -783,6 +939,8 @@ export default function PainelLavaJato({
     let unsubAgendamentos: (() => void) | null = null;
     let unsubBanners: (() => void) | null = null;
     let unsubServicos: (() => void) | null = null;
+    let unsubProdutos: (() => void) | null = null;
+    let unsubVendas: (() => void) | null = null;
 
     if (db) {
       try {
@@ -1004,6 +1162,115 @@ export default function PainelLavaJato({
             console.warn('Firestore onSnapshot servicos (Painel):', error);
           }
         );
+
+        const qProdutos = query(collection(db, 'produtos'));
+        unsubProdutos = onSnapshot(
+          qProdutos,
+          (snapshot: any) => {
+            const produtosFirestore: ProdutoEstoque[] = [];
+            snapshot.forEach((docSnap: any) => {
+              const data = docSnap.data();
+              const docUnidade = String(data.unidadeId || '').toLowerCase();
+              const pertence = !docUnidade || aliasesUnidade.some(alias => 
+                docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
+              );
+              if (pertence && !idsExcluidosRef.current.has(docSnap.id)) {
+                produtosFirestore.push({
+                  id: docSnap.id,
+                  nome: data.nome || 'Produto',
+                  precoVenda: typeof data.precoVenda === 'number' ? data.precoVenda : (parseFloat(data.precoVenda) || 0),
+                  precoCusto: typeof data.precoCusto === 'number' ? data.precoCusto : (parseFloat(data.precoCusto) || 0),
+                  estoque: typeof data.estoque === 'number' ? data.estoque : (parseInt(data.estoque) || 0),
+                  min: typeof data.min === 'number' ? data.min : (parseInt(data.min) || 2),
+                  categoria: data.categoria || 'Geral',
+                  codigoBarras: data.codigoBarras || '',
+                  ativo: data.ativo !== false,
+                  descricao: data.descricao || '',
+                  unidadeId: data.unidadeId || unidadeLogada
+                });
+              }
+            });
+
+            if (produtosFirestore.length > 0) {
+              setProdutos((prev) => {
+                const mapa = new Map<string, ProdutoEstoque>();
+                produtosFirestore
+                  .filter(p => !idsExcluidosRef.current.has(p.id))
+                  .forEach((p) => mapa.set(p.id, p));
+                prev
+                  .filter(p => !idsExcluidosRef.current.has(p.id))
+                  .forEach((p) => {
+                    if (!mapa.has(p.id)) mapa.set(p.id, p);
+                  });
+                const listaFinal = Array.from(mapa.values());
+                try {
+                  localStorage.setItem('hubwash_produtos', JSON.stringify(listaFinal));
+                } catch {}
+                return listaFinal;
+              });
+            }
+          },
+          (error: any) => {
+            console.warn('Firestore onSnapshot produtos (Painel):', error);
+          }
+        );
+
+        const qVendas = query(collection(db, 'vendas'));
+        unsubVendas = onSnapshot(
+          qVendas,
+          (snapshot: any) => {
+            const vendasFirestore: VendaPDV[] = [];
+            snapshot.forEach((docSnap: any) => {
+              const data = docSnap.data();
+              const docUnidade = String(data.unidadeId || '').toLowerCase();
+              const pertence = !docUnidade || aliasesUnidade.some(alias => 
+                docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
+              );
+              if (pertence) {
+                const sub = typeof data.subtotal === 'number' ? data.subtotal : (typeof data.valorSubtotal === 'number' ? data.valorSubtotal : 0);
+                const tot = typeof data.total === 'number' ? data.total : (typeof data.valorFinal === 'number' ? data.valorFinal : 0);
+                vendasFirestore.push({
+                  id: docSnap.id,
+                  itens: data.itens || [],
+                  subtotal: sub,
+                  valorSubtotal: sub,
+                  desconto: data.desconto || 0,
+                  total: tot,
+                  valorFinal: tot,
+                  formaPagamento: data.formaPagamento || 'dinheiro',
+                  valorRecebido: data.valorRecebido || data.valorPago,
+                  valorPago: data.valorPago || data.valorRecebido,
+                  troco: data.troco,
+                  clienteNome: data.clienteNome,
+                  veiculoPlaca: data.veiculoPlaca,
+                  operador: data.operador || data.atendenteNome,
+                  atendenteNome: data.atendenteNome || data.operador,
+                  unidadeId: data.unidadeId || unidadeLogada,
+                  dataHora: data.dataHora || new Date().toISOString(),
+                  data: data.data || new Date().toLocaleDateString('pt-BR')
+                });
+              }
+            });
+
+            if (vendasFirestore.length > 0) {
+              setVendasPDV((prev) => {
+                const mapa = new Map<string, VendaPDV>();
+                vendasFirestore.forEach((v) => mapa.set(v.id, v));
+                prev.forEach((v) => {
+                  if (!mapa.has(v.id)) mapa.set(v.id, v);
+                });
+                const listaFinal = Array.from(mapa.values());
+                try {
+                  localStorage.setItem('hubwash_vendas_pdv', JSON.stringify(listaFinal));
+                } catch {}
+                return listaFinal;
+              });
+            }
+          },
+          (error: any) => {
+            console.warn('Firestore onSnapshot vendas (Painel):', error);
+          }
+        );
       } catch (err) {
         console.warn('Erro ao configurar listeners do Firestore:', err);
       }
@@ -1016,6 +1283,8 @@ export default function PainelLavaJato({
       if (unsubAgendamentos) unsubAgendamentos();
       if (unsubBanners) unsubBanners();
       if (unsubServicos) unsubServicos();
+      if (unsubProdutos) unsubProdutos();
+      if (unsubVendas) unsubVendas();
     };
   }, [aliasesUnidade, unidadeLogada]);
 
@@ -1093,7 +1362,26 @@ export default function PainelLavaJato({
     } else if (tipo === 'funcionario') {
       setFuncionarios(prev => prev.filter(item => item.id !== id));
     } else if (tipo === 'produto') {
-      setProdutos(prev => prev.filter(item => item.id !== id));
+      setProdutos(prev => {
+        const atualizados = prev.filter(item => item.id !== id);
+        try {
+          localStorage.setItem('hubwash_produtos', JSON.stringify(atualizados));
+        } catch {}
+        return atualizados;
+      });
+      try {
+        await excluirProdutoServidor(id);
+      } catch {}
+      if (db) {
+        try {
+          await deleteDoc(doc(db, 'produtos', id));
+        } catch {}
+        try {
+          const qProd = query(collection(db, 'produtos'), where('id', '==', id));
+          const snap = await getDocs(qProd);
+          snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
+        } catch {}
+      }
     } else if (tipo === 'movimentacao') {
       setMovimentacoesCaixa(prev => prev.filter(item => item.id !== id));
     } else if (tipo === 'banner') {
@@ -1247,13 +1535,59 @@ export default function PainelLavaJato({
         detail: { cliente: itemAlvo.cliente, status: statusAgendamento }
       }));
     }
+
+    // 3. Disparo Automático de Push Notification FCM para o celular do cliente
+    try {
+      const clienteNomeNormalizado = String(itemAlvo.cliente || '').trim().toLowerCase();
+      const clienteEncontrado = clientes.find(c =>
+        String(c.nome || '').trim().toLowerCase() === clienteNomeNormalizado ||
+        (agCorrespondente?.telefone && c.telefone && c.telefone.replace(/\D/g, '') === agCorrespondente.telefone.replace(/\D/g, ''))
+      );
+
+      let tokenDestinatario = clienteEncontrado?.fcmToken;
+
+      // Se o token ainda não estiver em memória, tenta buscar no documento do Firestore
+      if (!tokenDestinatario && db && clienteEncontrado?.id) {
+        try {
+          const snapCliente = await getDocs(query(collection(db, 'clientes'), where('__name__', '==', clienteEncontrado.id)));
+          if (!snapCliente.empty) {
+            tokenDestinatario = snapCliente.docs[0].data()?.fcmToken;
+          }
+        } catch {}
+      }
+
+      if (tokenDestinatario) {
+        let tituloPush = 'Atualização do seu Veículo • HubWash';
+        let corpoPush = `Seu veículo ${itemAlvo.veiculo} teve o status atualizado para ${proximoStatus}.`;
+
+        if (proximoStatus === 'Lavando') {
+          tituloPush = '🚿 Veículo em Lavagem!';
+          corpoPush = `Seu veículo ${itemAlvo.veiculo} já entrou no box e está sendo lavado com todo o cuidado!`;
+        } else if (proximoStatus === 'Pronto') {
+          tituloPush = '✨ Veículo Pronto para Retirada!';
+          corpoPush = `Seu veículo ${itemAlvo.veiculo} está pronto, limpo e cheiroso para você retirar!`;
+        } else if (proximoStatus === 'Entregue') {
+          tituloPush = '🎉 Veículo Entregue!';
+          corpoPush = `Agradecemos a preferência! Volte sempre e consulte seus pontos no aplicativo.`;
+        }
+
+        enviarNotificacaoPushNetlify({
+          token: tokenDestinatario,
+          title: tituloPush,
+          body: corpoPush,
+          url: window.location.origin
+        }).catch(errPush => console.warn('Erro ao disparar push FCM via Netlify:', errPush));
+      }
+    } catch (errGeralPush) {
+      console.warn('Erro ao processar notificação push FCM:', errGeralPush);
+    }
   };
 
   // Puxar agendamento diretamente para a Fila de Lavagem com status inicial 'Espera'
   const puxarAgendamentoParaFila = async (ag: AgendamentoPWA) => {
     const jaNaFila = veiculosFila.find(v =>
       (v.agendamentoId && v.agendamentoId === ag.id) ||
-      (v.cliente.toLowerCase().trim() === ag.cliente.toLowerCase().trim() && v.status !== 'Entregue')
+      (v.cliente && ag.cliente && String(v.cliente).toLowerCase().trim() === String(ag.cliente).toLowerCase().trim() && v.status !== 'Entregue')
     );
 
     if (jaNaFila) {
@@ -1329,7 +1663,7 @@ export default function PainelLavaJato({
     }
 
     const agCorrespondente = agendamentos.find(a =>
-      a.cliente.toLowerCase().trim() === novoClienteFila.toLowerCase().trim() &&
+      a.cliente && String(a.cliente).toLowerCase().trim() === novoClienteFila.toLowerCase().trim() &&
       a.status !== 'Concluido' && a.status !== 'Cancelado'
     );
 
@@ -1450,13 +1784,13 @@ export default function PainelLavaJato({
 
   // Pontuar cliente diretamente pelo agendamento recebido
   const handlePontuarAgendamento = async (ag: AgendamentoPWA) => {
-    const termoNome = ag.cliente.trim().toLowerCase();
-    const termoTel = ag.telefone.replace(/\D/g, '');
+    const termoNome = String(ag.cliente || '').trim().toLowerCase();
+    const termoTel = String(ag.telefone || '').replace(/\D/g, '');
 
     const clienteExistente = clientes.find(
       (c) =>
-        c.nome.trim().toLowerCase() === termoNome ||
-        (termoTel.length >= 8 && c.telefone.replace(/\D/g, '').includes(termoTel))
+        String(c.nome || '').trim().toLowerCase() === termoNome ||
+        (termoTel.length >= 8 && String(c.telefone || '').replace(/\D/g, '').includes(termoTel))
     );
 
     if (clienteExistente) {
@@ -1716,35 +2050,153 @@ export default function PainelLavaJato({
     mostrarToast(`Lançamento de ${nova.tipo.toUpperCase()} no valor de R$ ${nova.valor.toFixed(2)} registrado!`, 'sucesso');
   };
 
-  // Adicionar Estoque
-  const handleAdicionarProduto = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!novoProdNome.trim()) {
-      mostrarToast('Digite o nome do produto.', 'erro');
-      return;
-    }
-
-    const novo: ProdutoEstoque = {
-      id: String(Date.now()),
-      nome: novoProdNome.trim(),
-      estoque: parseInt(novoProdQtd) || 0,
-      min: parseInt(novoProdMin) || 2,
-      categoria: novoProdCat
+  // ==========================================
+  // GESTÃO DE PRODUTOS & ESTOQUE
+  // ==========================================
+  const handleSalvarProduto = async (prod: ProdutoEstoque) => {
+    const precoFinal = typeof prod.preco === 'number' ? prod.preco : (typeof prod.precoVenda === 'number' ? prod.precoVenda : 0);
+    const prodFinal: ProdutoEstoque = {
+      ...prod,
+      preco: precoFinal,
+      precoVenda: precoFinal,
+      unidadeId: unidadeLogada
     };
 
-    setProdutos([...produtos, novo]);
-    setNovoProdNome('');
-    mostrarToast(`Produto "${novo.nome}" cadastrado no estoque!`, 'sucesso');
+    setProdutos(prev => {
+      const existe = prev.some(p => p.id === prodFinal.id);
+      const atualizados = existe ? prev.map(p => p.id === prodFinal.id ? prodFinal : p) : [prodFinal, ...prev];
+      try {
+        localStorage.setItem('hubwash_produtos', JSON.stringify(atualizados));
+      } catch {}
+      return atualizados;
+    });
+
+    mostrarToast(`Produto "${prodFinal.nome}" salvo com sucesso!`, 'sucesso');
+
+    try {
+      await salvarProdutoServidor(prodFinal);
+      if (db) {
+        await setDoc(doc(db, 'produtos', prodFinal.id), {
+          ...prodFinal,
+          nome: prodFinal.nome,
+          preco: precoFinal,
+          precoVenda: precoFinal,
+          estoque: prodFinal.estoque,
+          categoria: prodFinal.categoria || 'Geral',
+          unidadeId: unidadeLogada,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      }
+    } catch (err) {
+      console.warn('Erro ao sincronizar produto:', err);
+    }
   };
 
-  const ajustarEstoque = (id: string, delta: number) => {
-    setProdutos(produtos.map(p => {
+  const handleExcluirProduto = (id: string) => {
+    const prod = produtos.find(p => p.id === id);
+    setItemParaExcluir({
+      tipo: 'produto',
+      id,
+      nome: prod?.nome || 'Produto'
+    });
+  };
+
+  const handleAjustarEstoque = async (id: string, delta: number) => {
+    let novoQtd = 0;
+    setProdutos(prev => prev.map(p => {
       if (p.id === id) {
-        const novoEstoque = Math.max(0, p.estoque + delta);
-        return { ...p, estoque: novoEstoque };
+        novoQtd = Math.max(0, p.estoque + delta);
+        return { ...p, estoque: novoQtd };
       }
       return p;
     }));
+
+    try {
+      await atualizarProdutoServidor(id, { estoque: novoQtd });
+      if (db) {
+        await updateDoc(doc(db, 'produtos', id), { estoque: novoQtd });
+      }
+    } catch {}
+  };
+
+  // ==========================================
+  // REGISTRAR VENDA NO PDV (FRENTE DE CAIXA)
+  // ==========================================
+  const handleRegistrarVenda = async (novaVenda: VendaPDV) => {
+    const valorVenda = typeof novaVenda.total === 'number' ? novaVenda.total : (novaVenda.valorFinal || 0);
+    const metodo = novaVenda.metodoPagamento || novaVenda.formaPagamento || 'dinheiro';
+    const dataVenda = novaVenda.data || new Date().toISOString().split('T')[0];
+
+    const vendaCompleta: VendaPDV = {
+      ...novaVenda,
+      total: valorVenda,
+      valorFinal: valorVenda,
+      metodoPagamento: metodo,
+      formaPagamento: metodo,
+      data: dataVenda
+    };
+
+    // 1. Adiciona a venda na lista
+    setVendasPDV(prev => [vendaCompleta, ...prev]);
+
+    // 2. Deduz estoque local e persiste
+    setProdutos(prev => {
+      const atualizados = prev.map(p => {
+        const itemVendido = vendaCompleta.itens.find(i => i.produtoId === p.id);
+        if (itemVendido) {
+          const novoEstoque = Math.max(0, p.estoque - itemVendido.quantidade);
+          return { ...p, estoque: novoEstoque };
+        }
+        return p;
+      });
+      try {
+        localStorage.setItem('hubwash_produtos', JSON.stringify(atualizados));
+      } catch {}
+      return atualizados;
+    });
+
+    // 3. Atualiza Caixa Diário automaticamente (Entrada de valor no caixa)
+    const movCaixa: MovimentacaoCaixa = {
+      id: `pdv_${vendaCompleta.id}`,
+      descricao: `Venda PDV • ${vendaCompleta.itens.length} item(s) [${metodo.toUpperCase()}${vendaCompleta.clienteNome ? ` - ${vendaCompleta.clienteNome}` : ''}]`,
+      tipo: 'entrada',
+      valor: valorVenda,
+      data: 'Hoje'
+    };
+    setMovimentacoesCaixa(prev => [movCaixa, ...prev]);
+
+    mostrarToast(`Venda PDV de R$ ${valorVenda.toFixed(2)} registrada e lançada no Caixa!`, 'sucesso');
+
+    // 4. Salva no servidor REST e Firestore
+    try {
+      await salvarVendaServidor(vendaCompleta);
+      if (db) {
+        await setDoc(doc(db, 'vendas', vendaCompleta.id), {
+          ...vendaCompleta,
+          itens: vendaCompleta.itens,
+          total: valorVenda,
+          data: dataVenda,
+          metodoPagamento: metodo,
+          formaPagamento: metodo,
+          unidadeId: unidadeLogada,
+          createdAt: new Date().toISOString()
+        });
+
+        for (const item of vendaCompleta.itens) {
+          try {
+            const prodAtual = produtos.find(p => p.id === item.produtoId);
+            const novoEstoque = Math.max(0, (prodAtual?.estoque || item.quantidade) - item.quantidade);
+            await updateDoc(doc(db, 'produtos', item.produtoId), { estoque: novoEstoque });
+          } catch {}
+        }
+      }
+    } catch (err) {
+      console.warn('Erro ao sincronizar venda PDV:', err);
+    }
+  };
+
+  const handleAdicionarAoCaixa = (mov: MovimentacaoCaixa) => {
+    setMovimentacoesCaixa(prev => [mov, ...prev]);
   };
 
   // Criar Agendamento
@@ -2235,19 +2687,17 @@ export default function PainelLavaJato({
             {sidebarAberta ? (
               <div className="flex items-center gap-2.5 overflow-hidden">
                 <img
-                  src="/logo.png"
-                  alt="HubWash"
+                  src={logoLavaJato || "/logo.png"}
+                  alt={nomeLavaJato}
                   onError={(e) => {
                     const target = e.currentTarget;
-                    if (target.src.endsWith('/logo.png')) {
-                      target.src = '/pwa-192x192.png';
-                    } else if (target.src.endsWith('/pwa-192x192.png')) {
-                      target.src = '/hubwash.png';
+                    if (target.src !== '/logo.png') {
+                      target.src = '/logo.png';
                     } else {
                       target.style.display = 'none';
                     }
                   }}
-                  className="h-9 w-auto max-w-[95px] object-contain shrink-0 drop-shadow"
+                  className="h-9 w-auto max-w-[95px] object-contain shrink-0 drop-shadow rounded-lg"
                 />
                 <div className="truncate">
                   <span className="font-bold text-sm tracking-tight text-white block truncate">{nomeLavaJato}</span>
@@ -2256,17 +2706,17 @@ export default function PainelLavaJato({
               </div>
             ) : (
               <img
-                src="/logo.png"
-                alt="HubWash"
+                src={logoLavaJato || "/logo.png"}
+                alt={nomeLavaJato}
                 onError={(e) => {
                   const target = e.currentTarget;
-                  if (target.src.endsWith('/logo.png')) {
-                    target.src = '/pwa-192x192.png';
+                  if (target.src !== '/logo.png') {
+                    target.src = '/logo.png';
                   } else {
                     target.style.display = 'none';
                   }
                 }}
-                className="w-9 h-9 object-contain mx-auto drop-shadow"
+                className="w-9 h-9 object-contain mx-auto drop-shadow rounded-lg"
               />
             )}
             <button 
@@ -2283,14 +2733,15 @@ export default function PainelLavaJato({
           <nav className="p-3 space-y-1">
             {[
               { id: 'fila', label: 'Fila de Lavagem', icon: Layers },
+              { id: 'pdv', label: 'PDV • Caixa Rápido', icon: Store },
               { id: 'agendamentos', label: 'Agendamentos PWA', icon: Calendar },
               { id: 'servicos', label: 'Serviços & Valores', icon: Tag },
               { id: 'checklist', label: 'Checklist & Fotos', icon: CheckSquare },
               { id: 'relatorio', label: 'Relatório Financeiro', icon: TrendingUp },
               { id: 'caixa', label: 'Caixa Diário', icon: DollarSign },
+              { id: 'produtos', label: 'Produtos & Estoque', icon: Package },
               { id: 'clientes', label: 'Clientes & Fidelidade', icon: Users },
               { id: 'funcionarios', label: 'Funcionários / Comissão', icon: Wrench },
-              { id: 'produtos', label: 'Estoque / Produtos', icon: Package },
               { id: 'banner', label: 'Banners Promocionais', icon: ImageIcon },
               { id: 'configuracao', label: 'Configurações App', icon: Settings },
             ].map((item) => {
@@ -2333,14 +2784,15 @@ export default function PainelLavaJato({
             <h2 className="text-sm sm:text-base font-bold text-white uppercase tracking-wider flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${temaClasses.bg}`} />
               {abaAtiva === 'fila' && 'Fila de Lavagens em Tempo Real'}
+              {abaAtiva === 'pdv' && 'Frente de Caixa (PDV) • Venda de Produtos'}
               {abaAtiva === 'agendamentos' && 'Agendamentos Online (PWA Clientes)'}
               {abaAtiva === 'servicos' && 'Serviços & Tabela de Preços do Lava Jato'}
               {abaAtiva === 'checklist' && 'Checklist de Entrada & Vistoria Veicular'}
               {abaAtiva === 'relatorio' && 'Relatório Financeiro & Atendimentos Diários'}
+              {abaAtiva === 'caixa' && 'Caixa Diário & Movimentações'}
+              {abaAtiva === 'produtos' && 'Cadastro de Produtos & Gestão de Estoque'}
               {abaAtiva === 'clientes' && 'Clientes & Programa de Fidelidade'}
               {abaAtiva === 'funcionarios' && 'Funcionários & Comissões Automáticas'}
-              {abaAtiva === 'produtos' && 'Controle de Estoque & Insumos'}
-              {abaAtiva === 'caixa' && 'Caixa Diário & Movimentações'}
               {abaAtiva === 'banner' && 'Banners & Campanhas do App'}
               {abaAtiva === 'configuracao' && 'Configurações do Lava Jato'}
             </h2>
@@ -2524,8 +2976,8 @@ export default function PainelLavaJato({
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {veiculosFila
                     .filter(v => 
-                      v.cliente.toLowerCase().includes(buscaFila.toLowerCase()) ||
-                      v.veiculo.toLowerCase().includes(buscaFila.toLowerCase())
+                      String(v?.cliente || '').toLowerCase().includes(buscaFila.toLowerCase()) ||
+                      String(v?.veiculo || '').toLowerCase().includes(buscaFila.toLowerCase())
                     )
                     .map((item) => {
                       const statusStyles = {
@@ -2806,6 +3258,44 @@ export default function PainelLavaJato({
                 </div>
               </div>
             </div>
+          )}
+
+          {/* ========================================== */}
+          {/* ABA: FRENTE DE CAIXA (PDV) */}
+          {/* ========================================== */}
+          {abaAtiva === 'pdv' && (
+            <ModuloPDV
+              produtos={produtos}
+              clientes={clientes}
+              veiculosFila={veiculosFila}
+              vendasHistorico={vendasPDV}
+              unidadeId={unidadeLogada}
+              unidadeNome={nomeLavaJato}
+              onAtualizarEstoque={(produtoId: string, novoEstoque: number) => {
+                setProdutos(prev => {
+                  const atualizados = prev.map(p => p.id === produtoId ? { ...p, estoque: novoEstoque } : p);
+                  try {
+                    localStorage.setItem('hubwash_produtos', JSON.stringify(atualizados));
+                  } catch {}
+                  return atualizados;
+                });
+              }}
+              onRegistrarVenda={handleRegistrarVenda}
+              onAdicionarAoCaixa={(valor: number, descricao: string) => {
+                setMovimentacoesCaixa(prev => [
+                  {
+                    id: `pdv_${Date.now()}`,
+                    descricao,
+                    tipo: 'entrada',
+                    valor,
+                    data: 'Hoje'
+                  },
+                  ...prev
+                ]);
+              }}
+              onIrParaCadastroProdutos={() => setAbaAtiva('produtos')}
+              temaClasses={temaClasses}
+            />
           )}
 
           {/* ========================================== */}
@@ -3305,7 +3795,7 @@ export default function PainelLavaJato({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {clientes
-                    .filter(c => c.nome.toLowerCase().includes(buscaCliente.toLowerCase()))
+                    .filter(c => String(c?.nome || '').toLowerCase().includes(buscaCliente.toLowerCase()))
                     .map((c) => {
                       const progresso = (c.pontos / 10) * 100;
 
@@ -3519,137 +4009,24 @@ export default function PainelLavaJato({
           )}
 
           {/* ========================================== */}
-          {/* ABA 6: ESTOQUE / PRODUTOS */}
+          {/* ABA: PRODUTOS & GESTÃO DE ESTOQUE */}
           {/* ========================================== */}
           {abaAtiva === 'produtos' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Cadastro de Produto */}
-              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
-                  <PackagePlus className="w-4 h-4 text-indigo-400" /> Cadastrar Produto no Estoque
-                </h3>
-
-                <form onSubmit={handleAdicionarProduto} className="space-y-3 text-xs">
-                  <div>
-                    <label className="block text-slate-400 font-medium mb-1">Nome do Insumo / Produto *</label>
-                    <input
-                      type="text"
-                      value={novoProdNome}
-                      onChange={(e) => setNovoProdNome(e.target.value)}
-                      placeholder="Ex: Cera Líquida 5L"
-                      required
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-slate-400 font-medium mb-1">Qtd Atual</label>
-                      <input
-                        type="number"
-                        value={novoProdQtd}
-                        onChange={(e) => setNovoProdQtd(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-slate-400 font-medium mb-1">Qtd Mínima</label>
-                      <input
-                        type="number"
-                        value={novoProdMin}
-                        onChange={(e) => setNovoProdMin(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-400 font-medium mb-1">Categoria</label>
-                    <input
-                      type="text"
-                      value={novoProdCat}
-                      onChange={(e) => setNovoProdCat(e.target.value)}
-                      placeholder="Ex: Químicos, Panos, Ceras"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    className={`w-full py-2.5 px-4 ${temaClasses.bg} text-white font-bold rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-1.5`}
-                  >
-                    <Plus size={15} />
-                    <span>Adicionar ao Estoque</span>
-                  </button>
-                </form>
-              </div>
-
-              {/* Lista dos Produtos */}
-              <div className="lg:col-span-2 space-y-3">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <Package className="w-4 h-4 text-cyan-400" /> Insumos & Materiais
-                </h3>
-
-                <div className="space-y-3">
-                  {produtos.map((p) => {
-                    const estoqueBaixo = p.estoque <= p.min;
-
-                    return (
-                      <div
-                        key={p.id}
-                        className={`bg-slate-900/80 border rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg ${
-                          estoqueBaixo ? 'border-amber-500/40 bg-amber-950/10' : 'border-slate-800'
-                        }`}
-                      >
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <h4 className="text-sm font-bold text-white">{p.nome}</h4>
-                            {estoqueBaixo && (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center gap-1">
-                                <AlertTriangle size={11} /> Estoque Baixo
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-slate-400">
-                            Categoria: {p.categoria || 'Geral'} • Mínimo recomendado: {p.min} unidades
-                          </p>
-                        </div>
-
-                        <div className="flex items-center gap-3 self-end sm:self-auto">
-                          <div className="flex items-center gap-2 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800">
-                            <button
-                              type="button"
-                              onClick={() => ajustarEstoque(p.id, -1)}
-                              className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer"
-                            >
-                              -
-                            </button>
-                            <span className="text-sm font-bold text-white px-2">{p.estoque}</span>
-                            <button
-                              type="button"
-                              onClick={() => ajustarEstoque(p.id, 1)}
-                              className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer"
-                            >
-                              +
-                            </button>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => setItemParaExcluir({ tipo: 'produto', id: p.id, nome: p.nome })}
-                            className="p-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition cursor-pointer"
-                            title="Excluir Insumo"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
+            <ModuloProdutos
+              produtos={produtos}
+              unidadeId={unidadeLogada}
+              onSalvarProduto={handleSalvarProduto}
+              onExcluirProduto={(id: string, nome: string) => {
+                setItemParaExcluir({
+                  tipo: 'produto',
+                  id,
+                  nome: nome || 'Produto'
+                });
+              }}
+              onAjustarEstoque={handleAjustarEstoque}
+              onAbrirPDV={() => setAbaAtiva('pdv')}
+              temaClasses={temaClasses}
+            />
           )}
 
           {/* ========================================== */}
@@ -4029,7 +4406,101 @@ export default function PainelLavaJato({
                   <Settings className="w-5 h-5 text-blue-400" /> Personalização & Identidade Visual
                 </h3>
 
-              <div className="space-y-4 text-xs">
+              <div className="space-y-5 text-xs">
+                {/* LOGOTIPO PERSONALIZADO DA EMPRESA */}
+                <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-slate-200 font-bold text-sm flex items-center gap-2">
+                        <ImageIcon className="w-4 h-4 text-cyan-400" /> Logotipo da Empresa
+                      </label>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Faça o upload do logo exclusivo do seu lava jato para personalizar seu painel e o App dos clientes.
+                      </p>
+                    </div>
+
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${
+                      logoLavaJato 
+                        ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30' 
+                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                    }`}>
+                      {logoLavaJato ? 'Logotipo Personalizado Ativo' : 'Logotipo Padrão (HubWash)'}
+                    </span>
+                  </div>
+
+                  {/* Input de arquivo invisível */}
+                  <input
+                    ref={fileInputLogoRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                    onChange={handleUploadLogo}
+                    className="hidden"
+                  />
+
+                  <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-900/90 p-3.5 rounded-xl border border-slate-800/80">
+                    {/* Preview da Logo */}
+                    <div className="w-24 h-24 rounded-2xl bg-slate-950 border-2 border-dashed border-slate-700 flex items-center justify-center p-2 overflow-hidden shadow-inner shrink-0 group relative">
+                      <img
+                        src={logoLavaJato || "/logo.png"}
+                        alt="Logo Preview"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          if (target.src !== '/logo.png') {
+                            target.src = '/logo.png';
+                          }
+                        }}
+                        className="max-h-full max-w-full object-contain rounded drop-shadow"
+                      />
+                    </div>
+
+                    <div className="space-y-2 flex-1 w-full">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => fileInputLogoRef.current?.click()}
+                          className="py-2 px-3.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md text-xs"
+                        >
+                          <Upload size={14} />
+                          <span>Selecionar Imagem (PNG, JPG, SVG)</span>
+                        </button>
+
+                        {logoLavaJato && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLogoLavaJato('');
+                              mostrarToast('Logotipo personalizado removido. Clique em Salvar Alterações para confirmar.', 'info');
+                            }}
+                            className="py-2 px-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl font-semibold transition flex items-center gap-1.5 border border-rose-500/30 cursor-pointer text-xs"
+                          >
+                            <Trash2 size={13} />
+                            <span>Remover Logo (Usar Padrão)</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* URL alternativa */}
+                      <div>
+                        <label className="text-slate-400 text-[10px] block mb-1">Ou cole a URL direta da imagem do logo:</label>
+                        <input
+                          type="url"
+                          value={logoLavaJato.startsWith('data:') ? '' : logoLavaJato}
+                          onChange={(e) => setLogoLavaJato(e.target.value)}
+                          placeholder="https://exemplo.com/logo-empresa.png"
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-white focus:outline-none focus:border-cyan-500 text-xs placeholder-slate-600 font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-400 bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/60 flex items-start gap-2">
+                    <span className="text-cyan-400 font-bold shrink-0">📌 Nota:</span>
+                    <span>
+                      Esta alteração é <strong>exclusiva da sua empresa</strong> ({nomeLavaJato}). O logotipo do Administrador Geral do HubWash e das demais empresas cadastradas no sistema não serão afetados.
+                    </span>
+                  </p>
+                </div>
+
                 <div>
                   <label className="block text-slate-300 font-medium mb-1.5">Nome do Lava Jato</label>
                   <input
@@ -4136,32 +4607,44 @@ export default function PainelLavaJato({
                     onClick={async () => {
                       try {
                         const salvos = localStorage.getItem('hubwash_lava_jatos');
+                        const slugUnidade = (unidadeNome || 'pitstop').toLowerCase().trim();
                         if (salvos) {
                           const lista = JSON.parse(salvos);
-                          const idx = lista.findIndex((x: any) => String(x.id).toLowerCase() === String(unidadeNome).toLowerCase() || String(x.nomeFantasia).toLowerCase() === String(unidadeNome).toLowerCase());
+                          const idx = lista.findIndex((x: any) => String(x.id).toLowerCase() === slugUnidade || String(x.nomeFantasia).toLowerCase() === slugUnidade);
                           if (idx !== -1) {
                             lista[idx] = {
                               ...lista[idx],
                               nomeFantasia: nomeLavaJato,
                               contato: contatoLavaJato,
-                              endereco: enderecoLavaJato
+                              endereco: enderecoLavaJato,
+                              logoUrl: logoLavaJato
                             };
                             localStorage.setItem('hubwash_lava_jatos', JSON.stringify(lista));
+                            localStorage.setItem(`hubwash_logo_${lista[idx].id}`, logoLavaJato);
+                            window.dispatchEvent(new CustomEvent('hubwash_logo_alterado', { 
+                              detail: { unidadeId: lista[idx].id, logoUrl: logoLavaJato } 
+                            }));
                             if (db) {
                               await setDoc(doc(db, 'unidades', lista[idx].id), {
                                 nomeFantasia: nomeLavaJato,
                                 contato: contatoLavaJato,
-                                endereco: enderecoLavaJato
+                                endereco: enderecoLavaJato,
+                                logoUrl: logoLavaJato
                               }, { merge: true }).catch(() => {});
                             }
+                          } else {
+                            localStorage.setItem(`hubwash_logo_${slugUnidade}`, logoLavaJato);
                           }
+                        } else {
+                          localStorage.setItem(`hubwash_logo_${slugUnidade}`, logoLavaJato);
                         }
                       } catch {}
-                      mostrarToast('Configurações da unidade salvas com sucesso!', 'sucesso');
+                      mostrarToast('Configurações e Logotipo da empresa salvos com sucesso!', 'sucesso');
                     }}
-                    className={`px-5 py-2 ${temaClasses.bg} text-white font-bold rounded-xl shadow-lg transition cursor-pointer`}
+                    className={`px-5 py-2.5 ${temaClasses.bg} text-white font-bold rounded-xl shadow-lg transition cursor-pointer flex items-center gap-1.5`}
                   >
-                    Salvar Alterações
+                    <Check size={14} />
+                    <span>Salvar Alterações</span>
                   </button>
                 </div>
               </div>

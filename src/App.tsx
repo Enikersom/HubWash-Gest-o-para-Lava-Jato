@@ -1,4 +1,4 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { AlertCircle, ArrowLeft } from 'lucide-react';
 import {
   db,
@@ -16,19 +16,59 @@ import {
 } from './firebase';
 import LoginOTP from './components/LoginOTP';
 import SplashScreen from './components/SplashScreen';
+import AdminMaster from './components/AdminMaster';
+import PainelLavaJato from './components/PainelLavaJato';
+import AppClientePWA from './components/AppClientePWA';
+import { URL_BASE_APP, URL_BASE_NETLIFY } from './constants';
 
-// Lazy loading para arranque ultrarrápido (0ms no Netlify e mobile)
-const AdminMaster = lazy(() => import('./components/AdminMaster'));
-const PainelLavaJato = lazy(() => import('./components/PainelLavaJato'));
-const AppClientePWA = lazy(() => import('./components/AppClientePWA'));
+export { URL_BASE_APP, URL_BASE_NETLIFY };
 
-export { db, collection, addDoc, onSnapshot, doc, setDoc, updateDoc, deleteDoc, query, where, orderBy, firebaseConfig };
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; errorText: string }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorText: '' };
+  }
 
-export const URL_BASE_APP = typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost') && !window.location.origin.includes('127.0.0.1')
-  ? window.location.origin
-  : 'https://ais-pre-nkmcuhhfcxk3jjddg2q4ar-163280791843.us-east1.run.app';
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, errorText: error?.message || String(error || 'Erro inesperado') };
+  }
 
-export const URL_BASE_NETLIFY = URL_BASE_APP;
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error('ErrorBoundary capturou erro:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 font-sans antialiased">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 p-6 rounded-2xl text-center space-y-4 shadow-2xl">
+            <div className="bg-rose-500/10 p-3 rounded-full text-rose-400 w-12 h-12 flex items-center justify-center mx-auto border border-rose-500/20">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <div className="space-y-1">
+              <h2 className="text-base font-bold text-white">HubWash - Proteção Ativa</h2>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                {this.state.errorText || 'Ocorreu uma pequena instabilidade na leitura de dados.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                this.setState({ hasError: false, errorText: '' });
+                window.location.reload();
+              }}
+              className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-2"
+            >
+              <ArrowLeft size={14} />
+              <span>Recarregar com Segurança</span>
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Função segura para ler parâmetros de busca na URL (query string, hash e pathname)
 function getParamSafe(name: string): string | null {
@@ -326,23 +366,25 @@ export default function App() {
   // TELA DE AUTENTICAÇÃO / LOGIN OTP
   if (!autenticado) {
     return (
-      <LoginOTP
-        onSuccess={(role, unidadeNome, telaCliente) => {
-          setAutenticado(true);
-          if (role === 'master') {
-            setTelaAtual('master');
-          } else if (role === 'cliente') {
-            if (unidadeNome) setUnidadeSelecionada(unidadeNome);
-            if (telaCliente) setTelaClienteInicial(telaCliente);
-            setTelaAtual('cliente');
-          } else {
-            if (unidadeNome) {
-              setUnidadeSelecionada(unidadeNome);
+      <ErrorBoundary>
+        <LoginOTP
+          onSuccess={(role, unidadeNome, telaCliente) => {
+            setAutenticado(true);
+            if (role === 'master') {
+              setTelaAtual('master');
+            } else if (role === 'cliente') {
+              if (unidadeNome) setUnidadeSelecionada(unidadeNome);
+              if (telaCliente) setTelaClienteInicial(telaCliente);
+              setTelaAtual('cliente');
+            } else {
+              if (unidadeNome) {
+                setUnidadeSelecionada(unidadeNome);
+              }
+              setTelaAtual('lavajato');
             }
-            setTelaAtual('lavajato');
-          }
-        }}
-      />
+          }}
+        />
+      </ErrorBoundary>
     );
   }
 
@@ -352,24 +394,55 @@ export default function App() {
     const viewClienteAtiva: 'login' | 'cadastro' = telaClienteInicial === 'login' ? 'login' : 'cadastro';
 
     return (
-      <Suspense fallback={fallbackLoading}>
-        <AppClientePWA
-          key={`cliente-${unidadeSelecionada}-${viewClienteAtiva}`}
-          unidadeNome={unidadeSelecionada}
-          telaInicial={viewClienteAtiva}
-          onVoltarLogin={() => {
-            setAutenticado(false);
-          }}
-        />
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={fallbackLoading}>
+          <AppClientePWA
+            key={`cliente-${unidadeSelecionada}-${viewClienteAtiva}`}
+            unidadeNome={unidadeSelecionada}
+            telaInicial={viewClienteAtiva}
+            onVoltarLogin={() => {
+              setAutenticado(false);
+            }}
+          />
+        </Suspense>
+      </ErrorBoundary>
     );
   }
 
   // TELA: ADMIN MASTER (HUBWASH)
   if (telaAtual === 'master') {
     return (
+      <ErrorBoundary>
+        <Suspense fallback={fallbackLoading}>
+          <AdminMaster
+            onLogout={() => {
+              try {
+                localStorage.removeItem('hubwash_operador_sessao');
+              } catch {}
+              setAutenticado(false);
+              setTelaAtual('lavajato');
+            }}
+            onIrParaLavaJato={(nome?: string) => {
+              if (nome) setUnidadeSelecionada(nome);
+              setTelaAtual('lavajato');
+            }}
+            onIrParaCliente={(nome?: string) => {
+              if (nome) setUnidadeSelecionada(nome);
+              setTelaClienteInicial('cadastro');
+              setTelaAtual('cliente');
+            }}
+          />
+        </Suspense>
+      </ErrorBoundary>
+    );
+  }
+
+  // TELA: PAINEL OPERACIONAL LAVA JATO
+  return (
+    <ErrorBoundary>
       <Suspense fallback={fallbackLoading}>
-        <AdminMaster
+        <PainelLavaJato
+          unidadeNome={unidadeSelecionada}
           onLogout={() => {
             try {
               localStorage.removeItem('hubwash_operador_sessao');
@@ -377,34 +450,9 @@ export default function App() {
             setAutenticado(false);
             setTelaAtual('lavajato');
           }}
-          onIrParaLavaJato={(nome?: string) => {
-            if (nome) setUnidadeSelecionada(nome);
-            setTelaAtual('lavajato');
-          }}
-          onIrParaCliente={(nome?: string) => {
-            if (nome) setUnidadeSelecionada(nome);
-            setTelaClienteInicial('cadastro');
-            setTelaAtual('cliente');
-          }}
         />
       </Suspense>
-    );
-  }
-
-  // TELA: PAINEL OPERACIONAL LAVA JATO
-  return (
-    <Suspense fallback={fallbackLoading}>
-      <PainelLavaJato
-        unidadeNome={unidadeSelecionada}
-        onLogout={() => {
-          try {
-            localStorage.removeItem('hubwash_operador_sessao');
-          } catch {}
-          setAutenticado(false);
-          setTelaAtual('lavajato');
-        }}
-      />
-    </Suspense>
+    </ErrorBoundary>
   );
 }
 

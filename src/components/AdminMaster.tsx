@@ -30,7 +30,7 @@ import {
   Infinity
 } from 'lucide-react';
 import { LavaJato } from '../types';
-import { URL_BASE_NETLIFY } from '../App';
+import { URL_BASE_NETLIFY } from '../constants';
 import { 
   db, 
   collection, 
@@ -425,28 +425,39 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
     }
   };
 
-  const listaFiltrada = lavaJatos.filter(lj => {
-    const matchBusca = 
-      lj.nomeFantasia.toLowerCase().includes(filtroBusca.toLowerCase()) ||
-      lj.nomeProprietario.toLowerCase().includes(filtroBusca.toLowerCase()) ||
-      lj.cnpj.includes(filtroBusca) ||
-      lj.id.includes(filtroBusca.toLowerCase());
+  const listaFiltrada = Array.isArray(lavaJatos) ? lavaJatos.filter(lj => {
+    if (!lj) return false;
+    const nomeFantasia = String(lj.nomeFantasia || '').toLowerCase();
+    const nomeProprietario = String(lj.nomeProprietario || '').toLowerCase();
+    const cnpj = String(lj.cnpj || '');
+    const id = String(lj.id || '').toLowerCase();
+    const busca = (filtroBusca || '').toLowerCase().trim();
+
+    const matchBusca = !busca || 
+      nomeFantasia.includes(busca) ||
+      nomeProprietario.includes(busca) ||
+      cnpj.includes(busca) ||
+      id.includes(busca);
 
     const matchStatus = filtroStatus === 'todos' || lj.statusPlano === filtroStatus;
     return matchBusca && matchStatus;
-  });
+  }) : [];
 
-  const totalUnidades = lavaJatos.length;
-  const unidadesAtivas = lavaJatos.filter(u => u.statusPlano === 'ativo').length;
-  const unidadesVitalicias = lavaJatos.filter(u => u.statusPlano === 'vitalicio').length;
-  const unidadesEmTeste = lavaJatos.filter(u => u.statusPlano === 'teste').length;
-  const unidadesBloqueadas = lavaJatos.filter(u => u.statusPlano === 'bloqueado').length;
-  const receitaMensal = lavaJatos
-    .filter(u => u.statusPlano === 'ativo')
-    .reduce((acc, curr) => acc + (curr.valorPlano || 0), 0);
-  const receitaVitaliciaTotal = lavaJatos
-    .filter(u => u.statusPlano === 'vitalicio')
-    .reduce((acc, curr) => acc + (curr.valorPlano || 0), 0);
+  const totalUnidades = Array.isArray(lavaJatos) ? lavaJatos.length : 0;
+  const unidadesAtivas = Array.isArray(lavaJatos) ? lavaJatos.filter(u => u && u.statusPlano === 'ativo').length : 0;
+  const unidadesVitalicias = Array.isArray(lavaJatos) ? lavaJatos.filter(u => u && (u.statusPlano === 'vitalicio' || u.tipoPlano === 'vitalicio')).length : 0;
+  const unidadesEmTeste = Array.isArray(lavaJatos) ? lavaJatos.filter(u => u && u.statusPlano === 'teste').length : 0;
+  const unidadesBloqueadas = Array.isArray(lavaJatos) ? lavaJatos.filter(u => u && u.statusPlano === 'bloqueado').length : 0;
+  const receitaMensal = Array.isArray(lavaJatos)
+    ? lavaJatos
+      .filter(u => u && u.statusPlano === 'ativo' && u.tipoPlano !== 'vitalicio')
+      .reduce((acc, curr) => acc + (Number(curr?.valorPlano) || 0), 0)
+    : 0;
+  const receitaVitaliciaTotal = Array.isArray(lavaJatos)
+    ? lavaJatos
+      .filter(u => u && (u.statusPlano === 'vitalicio' || u.tipoPlano === 'vitalicio'))
+      .reduce((acc, curr) => acc + (Number(curr?.valorPlano) || 0), 0)
+    : 0;
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 antialiased font-sans flex flex-col justify-between relative">
@@ -984,9 +995,27 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                         <tr key={lj.id} className="hover:bg-slate-800/40 transition">
                           {/* UNIDADE / LINK */}
                           <td className="p-3.5 space-y-1">
-                            <div className="font-bold text-white text-sm">{lj.nomeFantasia}</div>
-                            <div className="text-[10px] text-slate-400 font-mono select-all bg-slate-900 px-1.5 py-0.5 rounded border border-slate-700 inline-block">
-                              ?unidade={lj.id}
+                            <div className="flex items-center gap-2.5">
+                              {lj.logoUrl ? (
+                                <img
+                                  src={lj.logoUrl}
+                                  alt={lj.nomeFantasia}
+                                  className="w-8 h-8 object-contain rounded-lg border border-slate-700 bg-slate-900 shrink-0 shadow-sm"
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = 'none';
+                                  }}
+                                />
+                              ) : (
+                                <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 font-bold text-xs shrink-0">
+                                  {lj.nomeFantasia ? lj.nomeFantasia.charAt(0).toUpperCase() : 'L'}
+                                </div>
+                              )}
+                              <div>
+                                <div className="font-bold text-white text-sm">{lj.nomeFantasia}</div>
+                                <div className="text-[10px] text-slate-400 font-mono select-all bg-slate-900 px-1.5 py-0.5 rounded border border-slate-700 inline-block">
+                                  ?unidade={lj.id}
+                                </div>
+                              </div>
                             </div>
                           </td>
 

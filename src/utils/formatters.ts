@@ -3,9 +3,10 @@
  */
 
 // Formata Celular / Telefone / WhatsApp: (XX) XXXXX-XXXX ou (XX) XXXX-XXXX
-export const formatarCelular = (valor: string): string => {
-  if (!valor) return '';
-  const digits = valor.replace(/\D/g, '').slice(0, 11);
+export const formatarCelular = (valor?: any): string => {
+  if (valor === null || valor === undefined) return '';
+  const str = String(valor).trim();
+  const digits = str.replace(/\D/g, '').slice(0, 11);
   if (!digits) return '';
   if (digits.length <= 2) return `(${digits}`;
   if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
@@ -14,18 +15,21 @@ export const formatarCelular = (valor: string): string => {
 };
 
 // Formata CEP: XXXXX-XXX
-export const formatarCEP = (valor: string): string => {
-  if (!valor) return '';
-  const digits = valor.replace(/\D/g, '').slice(0, 8);
+export const formatarCEP = (valor?: any): string => {
+  if (valor === null || valor === undefined) return '';
+  const str = String(valor).trim();
+  const digits = str.replace(/\D/g, '').slice(0, 8);
   if (!digits) return '';
   if (digits.length <= 5) return digits;
   return `${digits.slice(0, 5)}-${digits.slice(5, 8)}`;
 };
 
 // Formata CPF / CNPJ
-export const formatarCpfCnpj = (valor: string): string => {
-  if (!valor) return '';
-  const digits = valor.replace(/\D/g, '');
+export const formatarCpfCnpj = (valor?: any): string => {
+  if (valor === null || valor === undefined) return '';
+  const str = String(valor).trim();
+  const digits = str.replace(/\D/g, '');
+  if (!digits) return '';
   if (digits.length <= 11) {
     const d = digits.slice(0, 11);
     if (d.length <= 3) return d;

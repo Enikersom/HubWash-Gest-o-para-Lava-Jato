@@ -12,6 +12,7 @@ export interface LavaJato {
   dataExpiracao: string;
   statusPlano: 'teste' | 'ativo' | 'vitalicio' | 'bloqueado';
   tipoPlano?: 'mensal' | 'anual' | 'vitalicio';
+  logoUrl?: string;
 }
 
 export interface ItemFila {
@@ -45,12 +46,32 @@ export interface MovimentacaoCaixa {
   categoria?: string;
 }
 
+export type TipoVeiculoVistoria = 
+  | 'passeio' 
+  | 'suv' 
+  | 'caminhonete' 
+  | 'caminhao_cacamba' 
+  | 'caminhao' 
+  | 'moto' 
+  | 'van_onibus';
+
+export interface PontoAvaria {
+  id: string;
+  x: number; // Porcentagem de 0 a 100
+  y: number; // Porcentagem de 0 a 100
+  vista: 'lateral_esquerda' | 'frente' | 'traseira' | 'lateral_direita';
+  descricao?: string;
+  tipo?: 'risco' | 'amassado' | 'quebrado' | 'trinca' | 'outro';
+}
+
 export interface ItemChecklist {
   id: string;
   unidadeId?: string;
   veiculo: string;
   placa?: string;
   cliente?: string;
+  tipoVeiculo?: TipoVeiculoVistoria;
+  pontosAvarias?: PontoAvaria[];
   avarias: string;
   fotos: number;
   fotosUrls?: string[]; // Lista com até 10 fotos (base64 ou URLs)
@@ -64,6 +85,21 @@ export interface ItemChecklist {
     tapetes?: 'ok' | 'avaria' | 'nao_se_aplica';
     luzesFarois?: 'ok' | 'avaria' | 'nao_se_aplica';
   };
+  estadoLimpeza?: {
+    limpezaExterna?: 'bom' | 'medio' | 'ruim';
+    limpezaInterna?: 'bom' | 'medio' | 'ruim';
+    pneus?: 'bom' | 'medio' | 'ruim';
+    estepe?: 'bom' | 'medio' | 'ruim';
+  };
+  luzesChecagem?: {
+    farolAlto?: 'sim' | 'nao' | 'na';
+    farolBaixo?: 'sim' | 'nao' | 'na';
+    luzFreio?: 'sim' | 'nao' | 'na';
+    luzRe?: 'sim' | 'nao' | 'na';
+    setas?: 'sim' | 'nao' | 'na';
+    luzPlaca?: 'sim' | 'nao' | 'na';
+    neblina?: 'sim' | 'nao' | 'na';
+  };
   nivelCombustivel?: string;
   pertences?: string;
   observacoes?: string;
@@ -76,10 +112,52 @@ export interface ItemChecklist {
 export interface ProdutoEstoque {
   id: string;
   nome: string;
+  preco?: number;
+  precoVenda: number;
+  precoCusto?: number;
   estoque: number;
   min: number;
   categoria?: string;
-  precoCusto?: number;
+  codigoBarras?: string;
+  unidadeId?: string;
+  ativo?: boolean;
+  descricao?: string;
+  fotoUrl?: string;
+  updatedAt?: string;
+}
+
+export interface ItemVendaPDV {
+  produtoId: string;
+  nome: string;
+  quantidade: number;
+  precoUnitario: number;
+  subtotal: number;
+  categoria?: string;
+}
+
+export interface VendaPDV {
+  id: string;
+  unidadeId?: string;
+  itens: ItemVendaPDV[];
+  subtotal: number;
+  valorSubtotal?: number;
+  desconto: number;
+  total: number;
+  valorFinal?: number;
+  formaPagamento: 'dinheiro' | 'pix' | 'debito' | 'credito' | 'fiado';
+  metodoPagamento?: 'dinheiro' | 'pix' | 'debito' | 'credito' | 'fiado';
+  clienteNome?: string;
+  clienteId?: string;
+  veiculoPlaca?: string;
+  agendamentoId?: string;
+  dataHora: string;
+  data: string;
+  operador?: string;
+  atendenteNome?: string;
+  valorRecebido?: number;
+  valorPago?: number;
+  troco?: number;
+  observacoes?: string;
 }
 
 export interface ClienteFidelidade {
@@ -90,6 +168,8 @@ export interface ClienteFidelidade {
   pontos: number;
   veiculoPrincipal?: string;
   totalGasto?: number;
+  fcmToken?: string;
+  notificacoesAtivas?: boolean;
 }
 
 export interface BannerPromocional {
