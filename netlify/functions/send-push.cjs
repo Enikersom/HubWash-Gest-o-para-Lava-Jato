@@ -1,6 +1,6 @@
 // ============================================================================
 // NETLIFY FUNCTION: DISPARO DE NOTIFICAÇÃO PUSH VIA FIREBASE CLOUD MESSAGING (FCM)
-// Localização: /netlify/functions/send-push.js
+// Localização: /netlify/functions/send-push.cjs
 // Rota pública Netlify: /.netlify/functions/send-push
 // ============================================================================
 
