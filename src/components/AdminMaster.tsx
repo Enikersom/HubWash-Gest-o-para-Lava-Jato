@@ -176,8 +176,8 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
   const handleSalvarSenhaMaster = async (e: React.FormEvent) => {
     e.preventDefault();
     const pinLimpo = novaSenhaMaster.trim();
-    if (pinLimpo.length < 6) {
-      mostrarToast('A nova senha master deve ter no mínimo 6 dígitos ou caracteres.', 'erro');
+    if (pinLimpo.length !== 6) {
+      mostrarToast('A nova senha master deve ter exatamente 6 caracteres (letras ou números) para caber nos 6 campos do login.', 'erro');
       return;
     }
     if (pinLimpo !== confirmarNovaSenhaMaster.trim()) {
@@ -698,18 +698,18 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
             <form onSubmit={handleSalvarSenhaMaster} className="space-y-3.5">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Nova Senha Master <span className="text-rose-400">*</span>
+                  Nova Senha Master (Exatamente 6 caracteres) <span className="text-rose-400">*</span>
                 </label>
                 <div className="relative">
                   <input
                     type={mostrarNovaSenha ? 'text' : 'password'}
                     value={novaSenhaMaster}
                     onChange={(e) => setNovaSenhaMaster(e.target.value)}
-                    placeholder="Mínimo 6 dígitos ou caracteres"
-                    maxLength={16}
+                    placeholder="Ex: nic124 ou 124020 (6 caracteres)"
+                    maxLength={6}
                     required
                     autoFocus
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition font-mono tracking-wider"
                   />
                   <button
                     type="button"
@@ -719,6 +719,9 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                     {mostrarNovaSenha ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
                 </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  A senha precisa ter exatamente 6 caracteres (letras e/ou números) para corresponder aos 6 campos do Terminal OTP.
+                </p>
               </div>
 
               <div>
@@ -729,10 +732,10 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                   type={mostrarNovaSenha ? 'text' : 'password'}
                   value={confirmarNovaSenhaMaster}
                   onChange={(e) => setConfirmarNovaSenhaMaster(e.target.value)}
-                  placeholder="Repita a mesma senha"
-                  maxLength={16}
+                  placeholder="Repita os mesmos 6 caracteres"
+                  maxLength={6}
                   required
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition font-mono tracking-wider"
                 />
               </div>
 

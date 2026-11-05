@@ -52,6 +52,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // ⚙️ CONFIGURAÇÕES E SEGURANÇA (Senha Master e parâmetros globais)
+    match /configuracoes/{configId} {
+      allow read, write: if true;
+    }
+
     // 🛑 BLOQUEIO PADRÃO: Impede criação de coleções desconhecidas
     match /{document=**} {
       allow read, write: if false;

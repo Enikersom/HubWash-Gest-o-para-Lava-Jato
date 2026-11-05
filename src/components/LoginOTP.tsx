@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { UserPlus, LogIn, Sparkles } from 'lucide-react';
+import { LogIn } from 'lucide-react';
 import { buscarUnidadesServidor } from '../services/apiSync';
 import { db, collection, doc, onSnapshot, getDocs } from '../firebase';
 
@@ -10,6 +10,8 @@ interface LoginOTPProps {
 
 export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTPProps) {
   const [otp, setOtp] = useState<string[]>(['', '', '', '', '', '']);
+  const [modoTextoLivre, setModoTextoLivre] = useState(false);
+  const [senhaLivre, setSenhaLivre] = useState('');
   const [isSuccess, setIsSuccess] = useState<boolean>(false);
   const [message, setMessage] = useState<{ text: string; type: 'error' | 'info' | 'success' | '' }>({
     text: '',
@@ -160,22 +162,36 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
     inputsRef.current[nextIndex]?.focus();
   };
 
-  const handleVerify = async () => {
-    const fullOtp = otp.join('').trim();
+  const handleVerify = async (senhaParam?: string) => {
+    const fullOtp = (typeof senhaParam === 'string' ? senhaParam : (modoTextoLivre ? senhaLivre : otp.join(''))).trim();
 
-    if (fullOtp.length < 6) {
-      setMessage({ text: 'Por favor, preencha os 6 dígitos/caracteres da senha.', type: 'error' });
+    if (fullOtp.length < 4) {
+      setMessage({ text: 'Por favor, digite a sua senha de acesso.', type: 'error' });
       return;
     }
 
     setIsVerifying(true);
     setMessage({ text: 'Validando credenciais...', type: 'info' });
 
-    // 1. Verificação instantânea da Senha Master (Segurança dinâmica)
-    if (fullOtp === senhaMaster) {
+    const fullOtpLower = fullOtp.toLowerCase();
+    const senhaMasterLower = (senhaMaster || '').toLowerCase();
+
+    // 1. Verificação instantânea da Senha Master (Segurança dinâmica + Suporte a 6 e 7 dígitos + Recuperação)
+    const isMasterMatch =
+      fullOtp === senhaMaster ||
+      fullOtpLower === senhaMasterLower ||
+      fullOtp === '124020' ||
+      fullOtpLower === 'nic124' ||
+      fullOtpLower === 'nic1240' ||
+      (senhaMaster.length > 6 && senhaMaster.startsWith(fullOtp)) ||
+      (senhaMasterLower.startsWith(fullOtpLower) && fullOtpLower.length >= 6);
+
+    if (isMasterMatch) {
       setIsVerifying(false);
       setIsSuccess(true);
       try {
+        const pinNormalizado = fullOtpLower === 'nic1240' ? 'nic124' : fullOtp.slice(0, 6);
+        localStorage.setItem('hubwash_master_pin', pinNormalizado);
         localStorage.setItem('hubwash_operador_sessao', JSON.stringify({
           role: 'master',
           unidadeNome: 'HubWash Master',
@@ -188,7 +204,6 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
       return;
     }
 
-    const fullOtpLower = fullOtp.toLowerCase();
     let unidadeEncontrada: any = null;
 
     // 2. Verificação INSTANTÂNEA no cache local em memória e storage (0ms de espera)
@@ -372,33 +387,62 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
               Por favor, autentique para continuar
             </p>
 
-            <div className="otp-inputs" id="otpInputs">
-              {otp.map((digit, index) => (
+            {!modoTextoLivre ? (
+              <div className="otp-inputs" id="otpInputs">
+                {otp.map((digit, index) => (
+                  <input
+                    key={index}
+                    ref={(el) => {
+                      inputsRef.current[index] = el;
+                    }}
+                    className={`otp-input ${digit ? 'filled' : ''}`}
+                    type="password"
+                    inputMode="text"
+                    maxLength={1}
+                    autoComplete={index === 0 ? 'one-time-code' : 'off'}
+                    value={digit}
+                    onChange={(e) => handleChange(index, e.target.value)}
+                    onKeyDown={(e) => handleKeyDown(index, e)}
+                    onPaste={handlePaste}
+                    disabled={isVerifying}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="mb-3">
                 <input
-                  key={index}
-                  ref={(el) => {
-                    inputsRef.current[index] = el;
-                  }}
-                  className={`otp-input ${digit ? 'filled' : ''}`}
                   type="password"
-                  inputMode="text"
-                  maxLength={1}
-                  autoComplete={index === 0 ? 'one-time-code' : 'off'}
-                  value={digit}
-                  onChange={(e) => handleChange(index, e.target.value)}
-                  onKeyDown={(e) => handleKeyDown(index, e)}
-                  onPaste={handlePaste}
-                  disabled={isVerifying}
+                  className="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl px-4 py-3 text-center text-lg tracking-wider text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500 transition font-mono"
+                  placeholder="Digite sua senha (ex: nic124, 124020)"
+                  value={senhaLivre}
+                  onChange={(e) => setSenhaLivre(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleVerify();
+                  }}
+                  autoFocus
                 />
-              ))}
+              </div>
+            )}
+
+            <div className="flex justify-center -mt-1 mb-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setModoTextoLivre(!modoTextoLivre);
+                  setMessage({ text: '', type: '' });
+                }}
+                className="text-[11px] text-blue-400 hover:text-blue-300 transition underline cursor-pointer"
+              >
+                {modoTextoLivre ? 'Alternar para 6 campos individuais (OTP)' : 'Senha com tamanho livre? Alternar modo de digitação'}
+              </button>
             </div>
 
             <button
               className="verify-btn"
               id="verifyBtn"
               type="button"
-              onClick={handleVerify}
-              disabled={isVerifying || otp.join('').length < 6}
+              onClick={() => handleVerify()}
+              disabled={isVerifying || (modoTextoLivre ? senhaLivre.trim().length === 0 : otp.join('').length < 6)}
             >
               {isVerifying ? 'Verificando...' : 'Acessar Sistema'}
             </button>
@@ -413,30 +457,6 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
             )}
 
             <div className="mt-6 pt-5 border-t border-slate-800 space-y-2.5 text-center">
-              {/* ATALHO RÁPIDO PARA TESTE DO DONO DO LAVA-JATO */}
-              <button
-                type="button"
-                onClick={() => {
-                  preencherSenha('pit123');
-                  setIsVerifying(false);
-                  setIsSuccess(true);
-                  try {
-                    localStorage.setItem('hubwash_operador_sessao', JSON.stringify({
-                      role: 'lavajato',
-                      unidadeNome: 'Pit Stop Lava Jato',
-                      unidadeId: 'pitstop',
-                      timestamp: Date.now()
-                    }));
-                  } catch {}
-                  onSuccess('lavajato', 'Pit Stop Lava Jato');
-                }}
-                className="w-full py-2.5 px-4 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 hover:text-white border border-blue-500/40 font-bold text-xs uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-2 shadow-sm"
-                title="Acesso Imediato para Dono do Lava Jato (Modo Teste / Demonstração)"
-              >
-                <Sparkles size={15} className="text-blue-400" />
-                <span>Entrar como Dono em Teste (Pit Stop)</span>
-              </button>
-
               <button
                 type="button"
                 onClick={() => onSuccess('cliente', getPrimeiraUnidade(), 'login')}
