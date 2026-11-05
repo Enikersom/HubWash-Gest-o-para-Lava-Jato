@@ -82,6 +82,20 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
   const [modalLimparBanco, setModalLimparBanco] = useState(false);
   const [toast, setToast] = useState<{ mensagem: string; tipo: 'sucesso' | 'erro' | 'info' } | null>(null);
 
+  // ESTADO DE SENHA MASTER DO SUPER ADMIN
+  const [modalSenhaMaster, setModalSenhaMaster] = useState(false);
+  const [novaSenhaMaster, setNovaSenhaMaster] = useState('');
+  const [confirmarNovaSenhaMaster, setConfirmarNovaSenhaMaster] = useState('');
+  const [mostrarNovaSenha, setMostrarNovaSenha] = useState(false);
+  const [salvandoSenhaMaster, setSalvandoSenhaMaster] = useState(false);
+  const [senhaMasterAtual, setSenhaMasterAtual] = useState(() => {
+    try {
+      return (typeof window !== 'undefined' ? localStorage.getItem('hubwash_master_pin') : null) || '124020';
+    } catch {
+      return '124020';
+    }
+  });
+
   // ESTADO PARA EXIBIR O QR CODE GERADO NA TELA (MODAL)
   const [qrCodeModal, setQrCodeModal] = useState<{ visivel: boolean; link: string; nome: string }>({
     visivel: false,
@@ -132,6 +146,62 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
       localStorage.setItem('hubwash_lava_jatos', JSON.stringify(novos));
     } catch (e) {
       console.warn('Erro ao salvar no localStorage:', e);
+    }
+  };
+
+  // SINCRONIZAÇÃO EM TEMPO REAL DA SENHA MASTER COM FIRESTORE
+  useEffect(() => {
+    if (!db) return;
+    try {
+      const unsub = onSnapshot(doc(db, 'configuracoes', 'seguranca'), (snap) => {
+        if (snap.exists()) {
+          const dados = snap.data();
+          if (dados?.masterPin) {
+            const pinNuvem = String(dados.masterPin).trim();
+            setSenhaMasterAtual(pinNuvem);
+            try {
+              localStorage.setItem('hubwash_master_pin', pinNuvem);
+            } catch {}
+          }
+        }
+      }, (err) => {
+        console.warn('Ouvinte segurança Master:', err);
+      });
+      return () => unsub();
+    } catch (e) {
+      console.warn('Erro ao inicializar ouvinte de segurança:', e);
+    }
+  }, []);
+
+  const handleSalvarSenhaMaster = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const pinLimpo = novaSenhaMaster.trim();
+    if (pinLimpo.length < 6) {
+      mostrarToast('A nova senha master deve ter no mínimo 6 dígitos ou caracteres.', 'erro');
+      return;
+    }
+    if (pinLimpo !== confirmarNovaSenhaMaster.trim()) {
+      mostrarToast('A confirmação da nova senha não confere.', 'erro');
+      return;
+    }
+    setSalvandoSenhaMaster(true);
+    try {
+      localStorage.setItem('hubwash_master_pin', pinLimpo);
+      setSenhaMasterAtual(pinLimpo);
+      if (db) {
+        await setDoc(doc(db, 'configuracoes', 'seguranca'), {
+          masterPin: pinLimpo,
+          atualizadoEm: new Date().toISOString()
+        }, { merge: true });
+      }
+      mostrarToast('🔒 Senha Master atualizada com sucesso no banco e localmente!', 'sucesso');
+      setModalSenhaMaster(false);
+      setNovaSenhaMaster('');
+      setConfirmarNovaSenhaMaster('');
+    } catch (err: any) {
+      mostrarToast('Erro ao atualizar Senha Master: ' + err.message, 'erro');
+    } finally {
+      setSalvandoSenhaMaster(false);
     }
   };
 
@@ -595,6 +665,99 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
         </div>
       )}
 
+      {/* MODAL DE ALTERAÇÃO DA SENHA MASTER (SEM WINDOW.PROMPT/ALERT) */}
+      {modalSenhaMaster && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center">
+                  <Lock size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Alterar Senha Master</h3>
+                  <p className="text-[11px] text-slate-400">Proteção do Super Administrador SaaS</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalSenhaMaster(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 text-xs text-amber-300 flex items-start gap-2.5">
+              <ShieldAlert size={18} className="shrink-0 mt-0.5" />
+              <p className="leading-relaxed">
+                Ao salvar a nova senha, a senha padrão (124020) ou antiga será <strong className="text-white">imediatamente bloqueada</strong> em todos os acessos do painel e sincronizada na nuvem.
+              </p>
+            </div>
+
+            <form onSubmit={handleSalvarSenhaMaster} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Nova Senha Master <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={mostrarNovaSenha ? 'text' : 'password'}
+                    value={novaSenhaMaster}
+                    onChange={(e) => setNovaSenhaMaster(e.target.value)}
+                    placeholder="Mínimo 6 dígitos ou caracteres"
+                    maxLength={16}
+                    required
+                    autoFocus
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setMostrarNovaSenha(!mostrarNovaSenha)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    {mostrarNovaSenha ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Confirmar Nova Senha Master <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type={mostrarNovaSenha ? 'text' : 'password'}
+                  value={confirmarNovaSenhaMaster}
+                  onChange={(e) => setConfirmarNovaSenhaMaster(e.target.value)}
+                  placeholder="Repita a mesma senha"
+                  maxLength={16}
+                  required
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setModalSenhaMaster(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700 transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={salvandoSenhaMaster}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-lg shadow-blue-600/30 transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <Lock size={14} />
+                  <span>{salvandoSenhaMaster ? 'Salvando...' : 'Salvar Nova Senha'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* HEADER */}
       <header className="bg-slate-800 border-b border-slate-700 shadow-lg sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -633,6 +796,20 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
               </span>
               <span className="text-slate-300 font-medium">SaaS Operacional</span>
             </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setNovaSenhaMaster('');
+                setConfirmarNovaSenhaMaster('');
+                setModalSenhaMaster(true);
+              }}
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 hover:text-white border border-blue-500/30 text-xs font-semibold transition cursor-pointer"
+              title="Alterar a Senha Master do Super Admin"
+            >
+              <Lock size={14} />
+              <span>Alterar Senha Master</span>
+            </button>
 
             {onLogout && (
               <button

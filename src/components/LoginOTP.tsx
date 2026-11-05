@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { UserPlus, LogIn, Sparkles } from 'lucide-react';
 import { buscarUnidadesServidor } from '../services/apiSync';
-import { db, collection, onSnapshot, getDocs } from '../firebase';
+import { db, collection, doc, onSnapshot, getDocs } from '../firebase';
 
 interface LoginOTPProps {
   onSuccess: (role?: 'master' | 'lavajato' | 'cliente', unidadeNome?: string, telaCliente?: 'login' | 'cadastro' | 'home') => void;
@@ -17,7 +17,14 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
   });
   const [isVerifying, setIsVerifying] = useState<boolean>(false);
 
-  const SENHA_MASTER = '124020';
+  // Senha Master segura (lida da memória local ou nuvem Firestore)
+  const [senhaMaster, setSenhaMaster] = useState<string>(() => {
+    try {
+      return (typeof window !== 'undefined' ? localStorage.getItem('hubwash_master_pin') : null) || '124020';
+    } catch {
+      return '124020';
+    }
+  });
 
   const inputsRef = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -43,9 +50,21 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
   // Atualização suave em segundo plano via onSnapshot do Firestore (não bloqueia a tela)
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
+    let unsubSeguranca: (() => void) | null = null;
 
     if (db) {
       try {
+        // Escuta alteração em tempo real do PIN Master na nuvem
+        unsubSeguranca = onSnapshot(doc(db, 'configuracoes', 'seguranca'), (snap) => {
+          if (snap.exists() && snap.data()?.masterPin) {
+            const pinNuven = String(snap.data().masterPin).trim();
+            setSenhaMaster(pinNuven);
+            try {
+              localStorage.setItem('hubwash_master_pin', pinNuven);
+            } catch {}
+          }
+        }, () => {});
+
         unsubscribe = onSnapshot(collection(db, 'unidades'), (snap) => {
           if (!snap.empty) {
             const doFirestore: any[] = [];
@@ -79,6 +98,7 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
 
     return () => {
       if (unsubscribe) unsubscribe();
+      if (unsubSeguranca) unsubSeguranca();
     };
   }, []);
 
@@ -151,8 +171,8 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
     setIsVerifying(true);
     setMessage({ text: 'Validando credenciais...', type: 'info' });
 
-    // 1. Verificação instantânea da Senha Master: 124020
-    if (fullOtp === SENHA_MASTER) {
+    // 1. Verificação instantânea da Senha Master (Segurança dinâmica)
+    if (fullOtp === senhaMaster) {
       setIsVerifying(false);
       setIsSuccess(true);
       try {
