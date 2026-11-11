@@ -32,7 +32,11 @@ import {
   Tag,
   Droplets,
   Wrench,
-  Bell
+  Bell,
+  Truck,
+  Navigation,
+  MessageCircle,
+  Check
 } from 'lucide-react';
 import { db, collection, addDoc, setDoc, onSnapshot, doc, deleteDoc, query, where, orderBy, getDocs } from '../firebase';
 import { 
@@ -85,6 +89,13 @@ export interface Agendamento {
   veiculo: string;
   servico: string;
   status: string;
+  levaETraz?: boolean;
+  enderecoColeta?: string;
+  complementoEndereco?: string;
+  observacoesLevaETraz?: string;
+  taxaLevaETraz?: number;
+  motoristaResponsavel?: string;
+  statusLevaETraz?: string;
 }
 
 export interface NotificacaoStatusServico {
@@ -671,6 +682,25 @@ export default function AppClientePWA({
   const [agendaData, setAgendaData] = useState(hojeString);
   const [agendaHora, setAgendaHora] = useState('');
   const [agendaServico, setAgendaServico] = useState('Lavagem Completa');
+
+  // FORMULÁRIO E MODAL DE LEVA E TRAZ
+  const [modalLevaETraz, setModalLevaETraz] = useState(false);
+  const [levaRuaNumero, setLevaRuaNumero] = useState('');
+  const [levaBairro, setLevaBairro] = useState('');
+  const [levaCidade, setLevaCidade] = useState('');
+  const [levaCep, setLevaCep] = useState('');
+  const [levaComplemento, setLevaComplemento] = useState('');
+  const [levaData, setLevaData] = useState(hojeString);
+  const [levaHora, setLevaHora] = useState('09:00');
+  const [levaServico, setLevaServico] = useState('');
+  const [levaObservacoes, setLevaObservacoes] = useState('');
+  const [isEnviandoLevaETraz, setIsEnviandoLevaETraz] = useState(false);
+
+  // OPÇÃO DE LEVA E TRAZ NA ABA AGENDAR
+  const [solicitarLevaETrazNaAgenda, setSolicitarLevaETrazNaAgenda] = useState(false);
+  const [agendaLevaEndereco, setAgendaLevaEndereco] = useState('');
+  const [agendaLevaComplemento, setAgendaLevaComplemento] = useState('');
+  const [agendaLevaObs, setAgendaLevaObs] = useState('');
 
   // FORMULÁRIOS DE CADASTRO
   const [cadNome, setCadNome] = useState('');
@@ -1393,6 +1423,11 @@ export default function AppClientePWA({
       return;
     }
 
+    if (solicitarLevaETrazNaAgenda && !agendaLevaEndereco.trim()) {
+      mostrarToast('Informe o endereço de coleta e entrega para o Leva e Traz.', 'erro');
+      return;
+    }
+
     setIsAgendando(true);
 
     try {
@@ -1411,7 +1446,12 @@ export default function AppClientePWA({
         horario: agendaHora,
         veiculo: veiculoCompleto,
         servico: agendaServico,
-        status: 'Pendente'
+        status: 'Pendente',
+        levaETraz: solicitarLevaETrazNaAgenda,
+        statusLevaETraz: solicitarLevaETrazNaAgenda ? 'Solicitado' : undefined,
+        enderecoColeta: solicitarLevaETrazNaAgenda ? agendaLevaEndereco.trim() : undefined,
+        complementoEndereco: solicitarLevaETrazNaAgenda && agendaLevaComplemento.trim() ? agendaLevaComplemento.trim() : undefined,
+        observacoesLevaETraz: solicitarLevaETrazNaAgenda && agendaLevaObs.trim() ? agendaLevaObs.trim() : undefined
       };
 
       // Atualiza o estado local evitando qualquer duplicação por chave
@@ -1445,7 +1485,12 @@ export default function AppClientePWA({
         horario: horaAgendada,
         veiculo: novoAgendamento.veiculo,
         servico: servicoAgendado,
-        status: 'Pendente'
+        status: 'Pendente',
+        levaETraz: novoAgendamento.levaETraz,
+        statusLevaETraz: novoAgendamento.statusLevaETraz,
+        enderecoColeta: novoAgendamento.enderecoColeta,
+        complementoEndereco: novoAgendamento.complementoEndereco,
+        observacoesLevaETraz: novoAgendamento.observacoesLevaETraz
       });
 
       // 2. Salva no localStorage compartilhado e dispara evento em tempo real para o Painel
@@ -1462,7 +1507,12 @@ export default function AppClientePWA({
           unidadeId: unidadeIdNormalizada,
           unidadeVinculadaId: unidadeIdNormalizada,
           unidadeNome: unidadeAtual.nomeFantasia,
-          unidadeSlug: unidadeAtual.id
+          unidadeSlug: unidadeAtual.id,
+          levaETraz: novoAgendamento.levaETraz,
+          statusLevaETraz: novoAgendamento.statusLevaETraz,
+          enderecoColeta: novoAgendamento.enderecoColeta,
+          complementoEndereco: novoAgendamento.complementoEndereco,
+          observacoesLevaETraz: novoAgendamento.observacoesLevaETraz
         };
         const salvosPainel = localStorage.getItem('hubwash_agendamentos_painel');
         const listaPainel = salvosPainel ? JSON.parse(salvosPainel) : [];
@@ -1488,6 +1538,11 @@ export default function AppClientePWA({
             data: dataAgendada,
             horario: horaAgendada,
             status: 'Pendente',
+            levaETraz: novoAgendamento.levaETraz,
+            statusLevaETraz: novoAgendamento.statusLevaETraz,
+            enderecoColeta: novoAgendamento.enderecoColeta,
+            complementoEndereco: novoAgendamento.complementoEndereco,
+            observacoesLevaETraz: novoAgendamento.observacoesLevaETraz,
             createdAt: new Date().toISOString()
           });
         }
@@ -1495,12 +1550,173 @@ export default function AppClientePWA({
         console.warn('Agendamento salvo localmente / servidor:', firebaseErr);
       }
 
-      mostrarToast('🎉 Serviço agendado com sucesso!', 'sucesso');
+      mostrarToast(
+        solicitarLevaETrazNaAgenda
+          ? '🚚 Agendamento com Leva e Traz solicitado com sucesso!'
+          : '🎉 Serviço agendado com sucesso!',
+        'sucesso'
+      );
     } catch (err) {
       console.error('Erro ao agendar serviço:', err);
       mostrarToast('Ocorreu um problema ao registrar seu agendamento. Tente novamente.', 'erro');
     } finally {
       setIsAgendando(false);
+    }
+  };
+
+  const preencherEnderecoCadastroLeva = () => {
+    if (!usuarioLogado) return;
+    if (usuarioLogado.bairro) setLevaBairro(usuarioLogado.bairro);
+    if (usuarioLogado.cidade) setLevaCidade(usuarioLogado.cidade);
+    if (usuarioLogado.cep) setLevaCep(usuarioLogado.cep);
+    mostrarToast('📍 Bairro e Cidade do seu cadastro carregados!', 'sucesso');
+  };
+
+  const abrirModalLevaETraz = () => {
+    if (!usuarioLogado) {
+      setTelaAtiva('login');
+      mostrarToast('Faça login para solicitar o serviço de Leva e Traz.', 'info');
+      return;
+    }
+    if (!levaServico) {
+      setLevaServico(servicosDisponiveis[0]?.nome || 'Lavagem Completa');
+    }
+    if (!levaCidade && usuarioLogado.cidade) setLevaCidade(usuarioLogado.cidade);
+    if (!levaBairro && usuarioLogado.bairro) setLevaBairro(usuarioLogado.bairro);
+    if (!levaCep && usuarioLogado.cep) setLevaCep(usuarioLogado.cep);
+    setModalLevaETraz(true);
+  };
+
+  const handleConfirmarLevaETraz = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isEnviandoLevaETraz) return;
+
+    if (!usuarioLogado) {
+      mostrarToast('Faça login para solicitar o serviço.', 'erro');
+      return;
+    }
+
+    if (!levaRuaNumero.trim()) {
+      mostrarToast('Por favor, informe a rua e número onde devemos buscar o veículo.', 'erro');
+      return;
+    }
+
+    const enderecoCompleto = `${levaRuaNumero.trim()}${levaBairro ? `, ${levaBairro.trim()}` : ''}${levaCidade ? ` - ${levaCidade.trim()}` : ''}${levaCep ? ` (CEP: ${levaCep.trim()})` : ''}`;
+
+    setIsEnviandoLevaETraz(true);
+
+    try {
+      const veiculoCompleto = usuarioLogado.modelo
+        ? `${usuarioLogado.modelo}${usuarioLogado.placa ? ` (Placa: ${usuarioLogado.placa})` : ''}`
+        : (usuarioLogado.placa ? `Placa: ${usuarioLogado.placa}` : 'Veículo Cadastrado');
+
+      const agendamentoId = `ag_leva_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const servicoFinal = levaServico || servicosDisponiveis[0]?.nome || 'Lavagem Completa';
+
+      const novoAgendamento: Agendamento = {
+        id: agendamentoId,
+        unidadeId: unidadeIdNormalizada,
+        cliente: usuarioLogado.nome || 'Cliente',
+        telefone: usuarioLogado.contato || '(11) 99999-0000',
+        email: usuarioLogado.email || '',
+        data: levaData,
+        horario: levaHora,
+        veiculo: veiculoCompleto,
+        servico: servicoFinal,
+        status: 'Pendente',
+        levaETraz: true,
+        statusLevaETraz: 'Solicitado',
+        enderecoColeta: enderecoCompleto,
+        complementoEndereco: levaComplemento.trim() || undefined,
+        observacoesLevaETraz: levaObservacoes.trim() || undefined
+      };
+
+      setTodosAgendamentos(prev => [novoAgendamento, ...prev.filter(a => a.id !== agendamentoId)]);
+
+      // 1. Envia ao Servidor Central
+      await salvarAgendamentoServidor({
+        id: agendamentoId,
+        unidadeId: unidadeIdNormalizada,
+        cliente: novoAgendamento.cliente || 'Cliente',
+        telefone: novoAgendamento.telefone || '(11) 99999-0000',
+        email: novoAgendamento.email,
+        data: levaData,
+        horario: levaHora,
+        veiculo: veiculoCompleto,
+        servico: servicoFinal,
+        status: 'Pendente',
+        levaETraz: true,
+        statusLevaETraz: 'Solicitado',
+        enderecoColeta: enderecoCompleto,
+        complementoEndereco: levaComplemento.trim() || undefined,
+        observacoesLevaETraz: levaObservacoes.trim() || undefined
+      });
+
+      // 2. Local storage compartilhado com o Painel
+      try {
+        const itemPainel = {
+          id: agendamentoId,
+          cliente: usuarioLogado.nome || 'Cliente',
+          telefone: usuarioLogado.contato || '(11) 99999-0000',
+          veiculo: veiculoCompleto,
+          servico: servicoFinal,
+          data: levaData,
+          horario: levaHora,
+          status: 'Pendente',
+          unidadeId: unidadeIdNormalizada,
+          unidadeVinculadaId: unidadeIdNormalizada,
+          unidadeNome: unidadeAtual.nomeFantasia,
+          unidadeSlug: unidadeAtual.id,
+          levaETraz: true,
+          statusLevaETraz: 'Solicitado',
+          enderecoColeta: enderecoCompleto,
+          complementoEndereco: levaComplemento.trim() || undefined,
+          observacoesLevaETraz: levaObservacoes.trim() || undefined
+        };
+        const salvosPainel = localStorage.getItem('hubwash_agendamentos_painel');
+        const listaPainel = salvosPainel ? JSON.parse(salvosPainel) : [];
+        const listaFinal = [itemPainel, ...listaPainel.filter((a: any) => a.id !== agendamentoId)];
+        localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(listaFinal));
+        window.dispatchEvent(new CustomEvent('hubwash_agendamento_criado', { detail: itemPainel }));
+      } catch {}
+
+      // 3. Firestore
+      if (db) {
+        try {
+          await setDoc(doc(db, 'agendamentos', agendamentoId), {
+            id: agendamentoId,
+            unidadeId: unidadeIdNormalizada,
+            unidadeVinculadaId: unidadeIdNormalizada,
+            unidadeNome: unidadeAtual.nomeFantasia,
+            unidadeSlug: unidadeAtual.id,
+            cliente: usuarioLogado.nome || 'Cliente',
+            telefone: usuarioLogado.contato || '(11) 99999-0000',
+            email: usuarioLogado.email || '',
+            veiculo: veiculoCompleto,
+            servico: servicoFinal,
+            data: levaData,
+            horario: levaHora,
+            status: 'Pendente',
+            levaETraz: true,
+            statusLevaETraz: 'Solicitado',
+            enderecoColeta: enderecoCompleto,
+            complementoEndereco: levaComplemento.trim() || undefined,
+            observacoesLevaETraz: levaObservacoes.trim() || undefined,
+            createdAt: new Date().toISOString()
+          });
+        } catch (e) {
+          console.warn('Erro ao salvar Leva e Traz no Firestore:', e);
+        }
+      }
+
+      setModalLevaETraz(false);
+      setTelaAtiva('home');
+      mostrarToast('🚚 Solicitação de Leva e Traz enviada! Acompanhe o status do seu veículo ao vivo.', 'sucesso');
+    } catch (err) {
+      console.error('Erro ao enviar solicitação de leva e traz:', err);
+      mostrarToast('Erro ao enviar pedido de Leva e Traz. Tente novamente.', 'erro');
+    } finally {
+      setIsEnviandoLevaETraz(false);
     }
   };
 
@@ -1580,15 +1796,84 @@ export default function AppClientePWA({
   // Agendamento prioritário em andamento para o painel de rastreamento ao vivo
   const agendamentoAtivo = useMemo(() => {
     if (!meusAgendamentos || meusAgendamentos.length === 0) return null;
+    // Prioriza status de transporte ativo e lavagem
+    const entregando = meusAgendamentos.find(a => a.status === 'Entregando' || a.statusLevaETraz === 'Entregando');
+    if (entregando) return entregando;
     const pronto = meusAgendamentos.find(a => a.status === 'Pronto');
     if (pronto) return pronto;
     const lavando = meusAgendamentos.find(a => a.status === 'Lavando');
     if (lavando) return lavando;
+    const buscando = meusAgendamentos.find(a => a.status === 'Buscando' || a.statusLevaETraz === 'Buscando');
+    if (buscando) return buscando;
     const espera = meusAgendamentos.find(a => a.status === 'Espera');
     if (espera) return espera;
     const pendentes = meusAgendamentos.filter(a => a.status !== 'Cancelado');
     return pendentes[0] || null;
   }, [meusAgendamentos]);
+
+  // Retorna a etapa numérica (1 a 6) para o rastreamento exclusivo de Leva e Traz
+  const getEtapaLevaETraz = (status?: string, statusLeva?: string) => {
+    const s = (status || '').toLowerCase().trim();
+    const sl = (statusLeva || '').toLowerCase().trim();
+    if (s === 'entregue' || sl === 'entregue' || s === 'concluido' || s === 'finalizado') return 6;
+    if (s === 'entregando' || sl === 'entregando' || sl === 'a caminho da entrega') return 5;
+    if (s === 'pronto' || sl === 'pronto') return 4;
+    if (s === 'lavando' || s === 'em lavagem' || s === 'em andamento') return 3;
+    if (s === 'espera' || s === 'na fila' || s === 'fila' || sl === 'coletado') return 2;
+    if (s === 'buscando' || sl === 'buscando' || sl === 'a caminho da coleta') return 2;
+    return 1; // Solicitado / Pendente
+  };
+
+  const etapasLevaETrazConfig = [
+    {
+      passo: 1,
+      titulo: 'Solicitado',
+      subtitulo: 'Pedido Recebido',
+      detalhe: 'Solicitação de busca recebida pela equipe do lava jato.',
+      icone: CalendarCheck,
+      corAtiva: 'text-blue-400 bg-blue-500/20 border-blue-500/40'
+    },
+    {
+      passo: 2,
+      titulo: 'Coleta',
+      subtitulo: 'A Caminho / Pátio',
+      detalhe: 'Motorista a caminho do seu endereço para buscar o veículo.',
+      icone: Truck,
+      corAtiva: 'text-amber-400 bg-amber-500/20 border-amber-500/40 shadow-amber-500/10'
+    },
+    {
+      passo: 3,
+      titulo: 'No Box',
+      subtitulo: 'Lavando no Box',
+      detalhe: 'Veículo no box em higienização e lavagem técnica.',
+      icone: Droplets,
+      corAtiva: 'text-cyan-400 bg-cyan-500/20 border-cyan-500/40 animate-pulse shadow-cyan-500/20'
+    },
+    {
+      passo: 4,
+      titulo: 'Pronto',
+      subtitulo: 'Aguardando Despacho',
+      detalhe: 'Lavagem concluída com sucesso! Veículo aguardando liberação do motorista.',
+      icone: Sparkles,
+      corAtiva: 'text-emerald-400 bg-emerald-500/20 border-emerald-500/40 shadow-emerald-500/20'
+    },
+    {
+      passo: 5,
+      titulo: 'Entrega',
+      subtitulo: 'A Caminho da Casa',
+      detalhe: 'Motorista a caminho para entregar seu veículo limpo e perfumado no seu endereço!',
+      icone: Navigation,
+      corAtiva: 'text-indigo-400 bg-indigo-500/20 border-indigo-500/40 animate-pulse shadow-indigo-500/20'
+    },
+    {
+      passo: 6,
+      titulo: 'Entregue',
+      subtitulo: 'Finalizado',
+      detalhe: 'Veículo entregue no seu endereço com sucesso! Obrigado pela preferência.',
+      icone: CheckCircle2,
+      corAtiva: 'text-purple-400 bg-purple-500/20 border-purple-500/40'
+    }
+  ];
 
   const etapasLavagemConfig = [
     {
@@ -1833,7 +2118,185 @@ export default function AppClientePWA({
         </div>
       )}
 
-      {/* DISPOSITIVO MÓVEL / APP CONTAINER */}
+      {/* MODAL DEDICADO DE LEVA E TRAZ */}
+      {modalLevaETraz && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xl relative my-auto animate-in fade-in zoom-in-95 duration-200">
+            {/* Cabeçalho do Modal */}
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0">
+                  <Truck size={20} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white leading-tight">Solicitar Leva e Traz</h3>
+                  <p className="text-[11px] text-slate-400">Buscamos e entregamos no seu endereço</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalLevaETraz(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                title="Fechar"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmarLevaETraz} className="space-y-3 text-xs font-semibold">
+              {/* Botão de auto-preenchimento rápido */}
+              {(usuarioLogado?.bairro || usuarioLogado?.cidade || usuarioLogado?.cep) && (
+                <button
+                  type="button"
+                  onClick={preencherEnderecoCadastroLeva}
+                  className="w-full py-1.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-cyan-400 border border-cyan-500/30 text-[11px] font-medium flex items-center justify-center gap-1.5 transition cursor-pointer"
+                >
+                  <Navigation size={12} />
+                  <span>Carregar Bairro/Cidade do meu cadastro</span>
+                </button>
+              )}
+
+              {/* Endereço: Rua e Número */}
+              <div className="space-y-1">
+                <label className="text-slate-400 flex items-center justify-between">
+                  <span>Rua e Número da Coleta *</span>
+                  <span className="text-[10px] text-amber-400">Obrigatório</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={levaRuaNumero}
+                  onChange={(e) => setLevaRuaNumero(e.target.value)}
+                  placeholder="Ex: Av. Paulista, 1000 - Apto 42"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-xs"
+                />
+              </div>
+
+              {/* Bairro e Cidade */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-slate-400">Bairro</label>
+                  <input
+                    type="text"
+                    value={levaBairro}
+                    onChange={(e) => setLevaBairro(e.target.value)}
+                    placeholder="Bela Vista"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-slate-400">Cidade</label>
+                  <input
+                    type="text"
+                    value={levaCidade}
+                    onChange={(e) => setLevaCidade(e.target.value)}
+                    placeholder="São Paulo"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Complemento / Referência */}
+              <div className="space-y-1">
+                <label className="text-slate-400">Ponto de Referência / Interfone</label>
+                <input
+                  type="text"
+                  value={levaComplemento}
+                  onChange={(e) => setLevaComplemento(e.target.value)}
+                  placeholder="Ex: Próximo à padaria, interfone 102"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-xs"
+                />
+              </div>
+
+              {/* Serviço Desejado */}
+              <div className="space-y-1">
+                <label className="text-slate-400">Serviço Desejado *</label>
+                <select
+                  value={levaServico}
+                  onChange={(e) => setLevaServico(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-amber-500 text-xs cursor-pointer"
+                >
+                  {servicosDisponiveis.map((s) => (
+                    <option key={s.id} value={s.nome}>
+                      {s.nome} - R$ {s.valor.toFixed(2).replace('.', ',')}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Data e Horário da Busca */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-slate-400">Data da Coleta</label>
+                  <input
+                    type="date"
+                    min={hojeString}
+                    value={levaData}
+                    onChange={(e) => setLevaData(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white focus:outline-none focus:border-amber-500 text-xs cursor-pointer"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-slate-400">Horário da Coleta</label>
+                  <input
+                    type="time"
+                    value={levaHora}
+                    onChange={(e) => setLevaHora(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white focus:outline-none focus:border-amber-500 text-xs cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              {/* Observações especiais */}
+              <div className="space-y-1">
+                <label className="text-slate-400">Instruções para o Motorista</label>
+                <textarea
+                  rows={2}
+                  value={levaObservacoes}
+                  onChange={(e) => setLevaObservacoes(e.target.value)}
+                  placeholder="Ex: Deixar a chave na portaria com o seu Zé."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-xs resize-none"
+                />
+              </div>
+
+              {/* Box Informativo */}
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-300 leading-tight flex items-center gap-2">
+                <Truck size={14} className="shrink-0 text-amber-400" />
+                <span>Nossa equipe busca no seu endereço e você acompanha cada etapa do seu carro em tempo real pelo app!</span>
+              </div>
+
+              {/* Botões do Modal */}
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setModalLevaETraz(false)}
+                  className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isEnviandoLevaETraz || !levaRuaNumero.trim()}
+                  className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 text-xs font-black shadow-lg shadow-amber-500/20 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isEnviandoLevaETraz ? (
+                    <>
+                      <RefreshCw size={13} className="animate-spin" />
+                      <span>Enviando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check size={14} />
+                      <span>Confirmar Coleta</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div className="w-full max-w-md bg-slate-900 min-h-screen sm:min-h-[750px] sm:rounded-3xl shadow-2xl border border-slate-800 overflow-hidden flex flex-col justify-between relative">
         
         {/* TOPBAR DINÂMICO */}
@@ -2467,28 +2930,63 @@ export default function AppClientePWA({
                 </button>
               </div>
 
+              {/* Card Destaque: Solicitar Leva e Traz */}
+              <div className="bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-slate-900 border border-amber-500/30 rounded-2xl p-3.5 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 relative overflow-hidden">
+                <div className="absolute -right-6 -bottom-6 w-24 h-24 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+                <div className="flex items-center gap-3 relative z-10">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500/30 to-orange-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center shrink-0 shadow-lg shadow-amber-500/10">
+                    <Truck size={20} className="animate-pulse" />
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-xs font-black text-white uppercase tracking-wider">Serviço Leva e Traz</h4>
+                      <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-amber-500 text-slate-950">Comodidade VIP</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300">Buscamos e devolvemos seu carro higienizado no seu endereço!</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={abrirModalLevaETraz}
+                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs transition shadow-lg shadow-amber-500/20 flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                >
+                  <Truck size={14} />
+                  <span>Solicitar Leva e Traz</span>
+                </button>
+              </div>
+
               {/* ========================================== */}
               {/* STATUS DA LAVAGEM EM TEMPO REAL (CLIENTE) */}
               {/* ========================================== */}
               {agendamentoAtivo && (() => {
-                const etapaAtiva = getEtapaLavagem(agendamentoAtivo.status);
-                const isFinalizado = agendamentoAtivo.status === 'Concluido' || agendamentoAtivo.status === 'Entregue';
-                const isPronto = agendamentoAtivo.status === 'Pronto';
+                const isLeva = Boolean(agendamentoAtivo.levaETraz);
+                const etapaAtiva = isLeva
+                  ? getEtapaLevaETraz(agendamentoAtivo.status, agendamentoAtivo.statusLevaETraz)
+                  : getEtapaLavagem(agendamentoAtivo.status);
+
+                const isFinalizado = agendamentoAtivo.status === 'Concluido' || agendamentoAtivo.status === 'Entregue' || agendamentoAtivo.statusLevaETraz === 'Entregue';
+                const isEntregando = agendamentoAtivo.status === 'Entregando' || agendamentoAtivo.statusLevaETraz === 'Entregando';
+                const isPronto = agendamentoAtivo.status === 'Pronto' || agendamentoAtivo.statusLevaETraz === 'Pronto';
                 const isLavando = agendamentoAtivo.status === 'Lavando';
+                const isBuscando = agendamentoAtivo.status === 'Buscando' || agendamentoAtivo.statusLevaETraz === 'Buscando';
                 const isEspera = agendamentoAtivo.status === 'Espera';
 
                 return (
                   <div className="bg-gradient-to-b from-slate-900/95 to-slate-950 border border-slate-800 rounded-2xl p-4 shadow-2xl space-y-3.5 relative overflow-hidden">
                     {/* Glow de fundo contextual de acordo com a etapa */}
                     <div className={`absolute -top-10 -right-10 w-36 h-36 rounded-full blur-3xl pointer-events-none opacity-25 transition-all duration-500 ${
-                      isPronto
+                      isFinalizado
+                        ? 'bg-purple-500'
+                        : isEntregando
+                        ? 'bg-indigo-500'
+                        : isPronto
                         ? 'bg-emerald-500'
                         : isLavando
                         ? 'bg-cyan-500'
+                        : isBuscando
+                        ? 'bg-amber-500'
                         : isEspera
                         ? 'bg-amber-500'
-                        : isFinalizado
-                        ? 'bg-purple-500'
                         : 'bg-blue-500'
                     }`} />
 
@@ -2497,147 +2995,280 @@ export default function AppClientePWA({
                       <div className="flex items-center gap-2">
                         <span className="relative flex h-2.5 w-2.5">
                           <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                            isPronto ? 'bg-emerald-400' : isLavando ? 'bg-cyan-400' : isEspera ? 'bg-amber-400' : 'bg-blue-400'
+                            isFinalizado ? 'bg-purple-400' : isEntregando ? 'bg-indigo-400' : isPronto ? 'bg-emerald-400' : isLavando ? 'bg-cyan-400' : 'bg-blue-400'
                           }`}></span>
                           <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-                            isPronto ? 'bg-emerald-500' : isLavando ? 'bg-cyan-500' : isEspera ? 'bg-amber-500' : 'bg-blue-500'
+                            isFinalizado ? 'bg-purple-500' : isEntregando ? 'bg-indigo-500' : isPronto ? 'bg-emerald-500' : isLavando ? 'bg-cyan-500' : 'bg-blue-500'
                           }`}></span>
                         </span>
-                        <h4 className="text-xs font-bold text-white tracking-wide">
-                          Acompanhamento da Lavagem ao Vivo
+                        <h4 className="text-xs font-bold text-white tracking-wide flex items-center gap-1.5">
+                          {isLeva ? (
+                            <>
+                              <Truck size={14} className="text-amber-400" />
+                              <span>Leva e Traz • Acompanhamento Ao Vivo</span>
+                            </>
+                          ) : (
+                            <span>Acompanhamento da Lavagem ao Vivo</span>
+                          )}
                         </h4>
                       </div>
 
                       <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border transition-all ${
-                        isPronto
+                        isFinalizado
+                          ? 'bg-purple-500/10 text-purple-300 border-purple-500/40'
+                          : isEntregando
+                          ? 'bg-indigo-500/10 text-indigo-300 border-indigo-500/40 animate-pulse'
+                          : isPronto
                           ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40 shadow-sm shadow-emerald-500/20'
                           : isLavando
                           ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/40 animate-pulse'
+                          : isBuscando
+                          ? 'bg-amber-500/10 text-amber-300 border-amber-500/40 animate-pulse'
                           : isEspera
                           ? 'bg-amber-500/10 text-amber-300 border-amber-500/40'
-                          : isFinalizado
-                          ? 'bg-purple-500/10 text-purple-300 border-purple-500/40'
                           : 'bg-blue-500/10 text-blue-300 border-blue-500/40'
                       }`}>
-                        {isEspera ? '🚗 Na Fila (Pátio)' :
-                         isLavando ? '🚿 Lavando no Box' :
-                         isPronto ? '✨ Pronto p/ Retirada!' :
-                         isFinalizado ? '🎉 Concluído & Entregue' : '📅 Agendado'}
+                        {isLeva ? (
+                          isFinalizado ? '🎉 Veículo Entregue!' :
+                          isEntregando ? '🚀 Entrega a Caminho' :
+                          isPronto ? '✨ Pronto p/ Retorno' :
+                          isLavando ? '🚿 Lavando no Box' :
+                          isBuscando ? '🚚 Coleta a Caminho' :
+                          isEspera ? '🚗 Recepcionado no Pátio' : '📋 Solicitado'
+                        ) : (
+                          isEspera ? '🚗 Na Fila (Pátio)' :
+                          isLavando ? '🚿 Lavando no Box' :
+                          isPronto ? '✨ Pronto p/ Retirada!' :
+                          isFinalizado ? '🎉 Concluído & Entregue' : '📅 Agendado'
+                        )}
                       </span>
                     </div>
 
                     {/* Dados do Veículo e Serviço */}
-                    <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 flex items-center justify-between relative z-10">
-                      <div className="space-y-0.5">
-                        <p className="text-xs font-bold text-white flex items-center gap-1.5">
-                          <Car size={14} className="text-cyan-400" />
-                          <span>{agendamentoAtivo.veiculo}</span>
-                        </p>
-                        <p className="text-[11px] text-slate-400">
-                          Serviço: <strong className="text-slate-200">{agendamentoAtivo.servico}</strong>
-                        </p>
+                    <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 space-y-2 relative z-10">
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-0.5">
+                          <p className="text-xs font-bold text-white flex items-center gap-1.5">
+                            <Car size={14} className="text-cyan-400" />
+                            <span>{agendamentoAtivo.veiculo}</span>
+                          </p>
+                          <p className="text-[11px] text-slate-400">
+                            Serviço: <strong className="text-slate-200">{agendamentoAtivo.servico}</strong>
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[10px] text-slate-500">Horário</p>
+                          <p className="text-xs font-mono font-bold text-cyan-400">{agendamentoAtivo.horario}</p>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-[10px] text-slate-500">Horário</p>
-                        <p className="text-xs font-mono font-bold text-cyan-400">{agendamentoAtivo.horario}</p>
-                      </div>
+
+                      {/* Exibe Endereço de Coleta e Entrega se for Leva e Traz */}
+                      {isLeva && agendamentoAtivo.enderecoColeta && (
+                        <div className="pt-2 border-t border-slate-800/80 flex items-start gap-2 text-[11px] text-slate-300">
+                          <Navigation size={13} className="text-amber-400 shrink-0 mt-0.5" />
+                          <div className="min-w-0">
+                            <span className="text-[10px] text-slate-500 block uppercase font-mono">Endereço de Coleta e Retorno</span>
+                            <span className="font-medium text-slate-200 break-words">{agendamentoAtivo.enderecoColeta}</span>
+                            {agendamentoAtivo.complementoEndereco && (
+                              <span className="text-slate-400 block text-[10px]">Ref: {agendamentoAtivo.complementoEndereco}</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
-                    {/* Linha do Tempo Visual das 4 Etapas */}
+                    {/* Linha do Tempo Visual (4 ou 6 Etapas) */}
                     <div className="pt-1.5 pb-1 relative z-10">
-                      <div className="grid grid-cols-4 gap-1 relative">
-                        {/* Linha de fundo cinza */}
-                        <div className="absolute top-4 left-6 right-6 h-0.5 bg-slate-800 -z-0" />
-                        {/* Linha colorida de progresso */}
-                        <div
-                          className="absolute top-4 left-6 h-0.5 bg-gradient-to-r from-blue-500 via-cyan-400 to-emerald-400 transition-all duration-700 -z-0"
-                          style={{
-                            width: `${Math.max(0, Math.min(100, ((etapaAtiva - 1) / 3) * 88))}%`
-                          }}
-                        />
+                      {isLeva ? (
+                        <div className="grid grid-cols-6 gap-1 relative">
+                          <div className="absolute top-4 left-4 right-4 h-0.5 bg-slate-800 -z-0" />
+                          <div
+                            className="absolute top-4 left-4 h-0.5 bg-gradient-to-r from-blue-500 via-cyan-400 to-indigo-500 transition-all duration-700 -z-0"
+                            style={{
+                              width: `${Math.max(0, Math.min(100, ((etapaAtiva - 1) / 5) * 88))}%`
+                            }}
+                          />
+                          {etapasLevaETrazConfig.map((etp) => {
+                            const isPassada = etapaAtiva > etp.passo;
+                            const isAtual = etapaAtiva === etp.passo;
+                            const Icone = etp.icone;
 
-                        {etapasLavagemConfig.map((etp) => {
-                          const isPassada = etapaAtiva > etp.passo;
-                          const isAtual = etapaAtiva === etp.passo;
-                          const Icone = etp.icone;
-
-                          return (
-                            <div key={etp.passo} className="flex flex-col items-center text-center relative z-10">
-                              <div className={`w-8 h-8 rounded-full flex items-center justify-center border text-xs font-bold transition-all duration-300 shadow-md ${
-                                isPassada
-                                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-emerald-500/10'
-                                  : isAtual
-                                  ? etp.corAtiva
-                                  : 'bg-slate-900 text-slate-600 border-slate-800'
-                              }`}>
-                                {isPassada ? <CheckCircle2 size={16} /> : <Icone size={14} />}
+                            return (
+                              <div key={etp.passo} className="flex flex-col items-center text-center relative z-10">
+                                <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center border text-[10px] sm:text-xs font-bold transition-all duration-300 shadow-md ${
+                                  isPassada
+                                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-emerald-500/10'
+                                    : isAtual
+                                    ? etp.corAtiva
+                                    : 'bg-slate-900 text-slate-600 border-slate-800'
+                                }`}>
+                                  {isPassada ? <CheckCircle2 size={14} /> : <Icone size={12} />}
+                                </div>
+                                <span className={`mt-1 text-[9px] font-bold leading-tight ${
+                                  isAtual ? 'text-white' : isPassada ? 'text-emerald-400' : 'text-slate-600'
+                                }`}>
+                                  {etp.titulo}
+                                </span>
                               </div>
-                              <span className={`mt-1.5 text-[10px] font-bold leading-tight ${
-                                isAtual ? 'text-white' : isPassada ? 'text-emerald-400' : 'text-slate-600'
-                              }`}>
-                                {etp.titulo}
-                              </span>
-                              <span className="text-[8px] text-slate-500 hidden sm:block">
-                                {etp.subtitulo}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-4 gap-1 relative">
+                          <div className="absolute top-4 left-6 right-6 h-0.5 bg-slate-800 -z-0" />
+                          <div
+                            className="absolute top-4 left-6 h-0.5 bg-gradient-to-r from-blue-500 via-cyan-400 to-emerald-400 transition-all duration-700 -z-0"
+                            style={{
+                              width: `${Math.max(0, Math.min(100, ((etapaAtiva - 1) / 3) * 88))}%`
+                            }}
+                          />
+                          {etapasLavagemConfig.map((etp) => {
+                            const isPassada = etapaAtiva > etp.passo;
+                            const isAtual = etapaAtiva === etp.passo;
+                            const Icone = etp.icone;
+
+                            return (
+                              <div key={etp.passo} className="flex flex-col items-center text-center relative z-10">
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center border text-xs font-bold transition-all duration-300 shadow-md ${
+                                  isPassada
+                                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-emerald-500/10'
+                                    : isAtual
+                                    ? etp.corAtiva
+                                    : 'bg-slate-900 text-slate-600 border-slate-800'
+                                }`}>
+                                  {isPassada ? <CheckCircle2 size={16} /> : <Icone size={14} />}
+                                </div>
+                                <span className={`mt-1.5 text-[10px] font-bold leading-tight ${
+                                  isAtual ? 'text-white' : isPassada ? 'text-emerald-400' : 'text-slate-600'
+                                }`}>
+                                  {etp.titulo}
+                                </span>
+                                <span className="text-[8px] text-slate-500 hidden sm:block">
+                                  {etp.subtitulo}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
 
                     {/* Mensagem Contextual Explicativa */}
                     <div className={`p-2.5 rounded-xl border text-[11px] leading-relaxed relative z-10 flex items-start gap-2.5 ${
-                      isPronto
+                      isFinalizado
+                        ? 'bg-purple-500/10 border-purple-500/30 text-purple-300'
+                        : isEntregando
+                        ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300'
+                        : isPronto
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
                         : isLavando
                         ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300'
+                        : isBuscando
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
                         : isEspera
                         ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-                        : isFinalizado
-                        ? 'bg-purple-500/10 border-purple-500/30 text-purple-300'
                         : 'bg-slate-900/80 border-slate-800 text-slate-400'
                     }`}>
-                      {isPronto ? (
-                        <>
-                          <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                          <div>
-                            <strong className="block text-emerald-200">Veículo Pronto para Retirada!</strong>
-                            Seu carro está pronto, higienizado, perfumado e brilhando. Já pode buscá-lo no {unidadeAtual.nomeFantasia}!
-                          </div>
-                        </>
-                      ) : isLavando ? (
-                        <>
-                          <Droplets className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5 animate-bounce" />
-                          <div>
-                            <strong className="block text-cyan-200">Veículo no Box em Lavagem!</strong>
-                            Nossa equipe está lavando seu veículo com produtos especializados. O status mudará para "Pronto" assim que finalizarmos.
-                          </div>
-                        </>
-                      ) : isEspera ? (
-                        <>
-                          <Car className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                          <div>
-                            <strong className="block text-amber-200">Veículo na Fila de Lavagem (Pátio)</strong>
-                            Seu veículo já foi recepcionado no pátio e está na fila aguardando liberação do box de lavagem.
-                          </div>
-                        </>
-                      ) : isFinalizado ? (
-                        <>
-                          <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
-                          <div>
-                            <strong className="block text-purple-200">Lavagem Concluída & Entregue!</strong>
-                            Agradecemos pela preferência no {unidadeAtual.nomeFantasia}. Seus pontos de fidelidade foram registrados!
-                          </div>
-                        </>
+                      {isLeva ? (
+                        isFinalizado ? (
+                          <>
+                            <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                            <div>
+                              <strong className="block text-purple-200">Veículo Entregue com Sucesso!</strong>
+                              Seu veículo foi devolvido no seu endereço, limpo e perfumado. Agradecemos a preferência no {unidadeAtual.nomeFantasia}!
+                            </div>
+                          </>
+                        ) : isEntregando ? (
+                          <>
+                            <Navigation className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5 animate-pulse" />
+                            <div>
+                              <strong className="block text-indigo-200">Motorista a Caminho da Sua Casa!</strong>
+                              A lavagem foi concluída e o motorista está a caminho do seu endereço para devolver o veículo.
+                            </div>
+                          </>
+                        ) : isPronto ? (
+                          <>
+                            <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                            <div>
+                              <strong className="block text-emerald-200">Lavagem Concluída!</strong>
+                              Seu veículo está pronto e higienizado no lava jato. Estamos despachando o motorista para a entrega.
+                            </div>
+                          </>
+                        ) : isLavando ? (
+                          <>
+                            <Droplets className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5 animate-bounce" />
+                            <div>
+                              <strong className="block text-cyan-200">Veículo no Box em Lavagem!</strong>
+                              Nosso time está higienizando seu veículo com produtos de alta performance.
+                            </div>
+                          </>
+                        ) : isBuscando ? (
+                          <>
+                            <Truck className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 animate-pulse" />
+                            <div>
+                              <strong className="block text-amber-200">Motorista a Caminho p/ Buscar!</strong>
+                              Nossa equipe de Leva e Traz está em deslocamento para coletar seu veículo no seu endereço.
+                            </div>
+                          </>
+                        ) : isEspera ? (
+                          <>
+                            <Car className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                            <div>
+                              <strong className="block text-amber-200">Recepcionado no Lava Jato!</strong>
+                              O veículo já chegou ao pátio e está na fila aguardando liberação do box de lavagem.
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <Clock className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                            <div>
+                              <strong className="block text-blue-200">Solicitação de Leva e Traz Recebida!</strong>
+                              Agendado para coleta às {agendamentoAtivo.horario}. Nossa equipe confirmará o deslocamento em breve.
+                            </div>
+                          </>
+                        )
                       ) : (
-                        <>
-                          <Clock className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
-                          <div>
-                            <strong className="block text-blue-200">Agendamento Confirmado</strong>
-                            Aguardando sua chegada ao lava-jato no horário agendado ({agendamentoAtivo.horario}).
-                          </div>
-                        </>
+                        isPronto ? (
+                          <>
+                            <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                            <div>
+                              <strong className="block text-emerald-200">Veículo Pronto para Retirada!</strong>
+                              Seu carro está pronto, higienizado, perfumado e brilhando. Já pode buscá-lo no {unidadeAtual.nomeFantasia}!
+                            </div>
+                          </>
+                        ) : isLavando ? (
+                          <>
+                            <Droplets className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5 animate-bounce" />
+                            <div>
+                              <strong className="block text-cyan-200">Veículo no Box em Lavagem!</strong>
+                              Nossa equipe está lavando seu veículo com produtos especializados. O status mudará para "Pronto" assim que finalizarmos.
+                            </div>
+                          </>
+                        ) : isEspera ? (
+                          <>
+                            <Car className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                            <div>
+                              <strong className="block text-amber-200">Veículo na Fila de Lavagem (Pátio)</strong>
+                              Seu veículo já foi recepcionado no pátio e está na fila aguardando liberação do box de lavagem.
+                            </div>
+                          </>
+                        ) : isFinalizado ? (
+                          <>
+                            <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                            <div>
+                              <strong className="block text-purple-200">Lavagem Concluída & Entregue!</strong>
+                              Agradecemos pela preferência no {unidadeAtual.nomeFantasia}. Seus pontos de fidelidade foram registrados!
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <Clock className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                            <div>
+                              <strong className="block text-blue-200">Agendamento Confirmado</strong>
+                              Aguardando sua chegada ao lava-jato no horário agendado ({agendamentoAtivo.horario}).
+                            </div>
+                          </>
+                        )
                       )}
                     </div>
                   </div>
@@ -2962,6 +3593,93 @@ export default function AppClientePWA({
                       })}
                     </div>
                   </div>
+                </div>
+
+                {/* Opção Leva e Traz no Agendamento */}
+                <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-3.5 space-y-3">
+                  <div
+                    onClick={() => {
+                      const novoEstado = !solicitarLevaETrazNaAgenda;
+                      setSolicitarLevaETrazNaAgenda(novoEstado);
+                      if (novoEstado && !agendaLevaEndereco && (usuarioLogado.bairro || usuarioLogado.cidade)) {
+                        const endAuto = `${usuarioLogado.bairro || ''}${usuarioLogado.cidade ? `, ${usuarioLogado.cidade}` : ''}${usuarioLogado.cep ? ` (CEP: ${usuarioLogado.cep})` : ''}`.trim();
+                        setAgendaLevaEndereco(endAuto);
+                      }
+                    }}
+                    className="flex items-center justify-between cursor-pointer select-none"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className={`w-8 h-8 rounded-xl flex items-center justify-center transition ${
+                        solicitarLevaETrazNaAgenda ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40' : 'bg-slate-800 text-slate-400'
+                      }`}>
+                        <Truck size={16} />
+                      </div>
+                      <div>
+                        <span className="text-xs font-bold text-white block">Desejo Serviço de Leva e Traz</span>
+                        <span className="text-[10px] text-slate-400">Buscamos e entregamos o veículo no seu endereço</span>
+                      </div>
+                    </div>
+
+                    <div className={`w-11 h-6 flex items-center rounded-full p-1 duration-300 cursor-pointer ${
+                      solicitarLevaETrazNaAgenda ? 'bg-amber-500 justify-end' : 'bg-slate-800 justify-start'
+                    }`}>
+                      <div className="bg-white w-4 h-4 rounded-full shadow-md transform transition-transform" />
+                    </div>
+                  </div>
+
+                  {solicitarLevaETrazNaAgenda && (
+                    <div className="space-y-2.5 pt-2 border-t border-slate-800/80 animate-in fade-in duration-200">
+                      <div className="space-y-1">
+                        <label className="text-[11px] text-slate-400 flex items-center justify-between">
+                          <span>Endereço Completo de Coleta *</span>
+                          {(usuarioLogado.bairro || usuarioLogado.cidade) && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const endAuto = `${usuarioLogado.bairro || ''}${usuarioLogado.cidade ? `, ${usuarioLogado.cidade}` : ''}${usuarioLogado.cep ? ` (CEP: ${usuarioLogado.cep})` : ''}`.trim();
+                                setAgendaLevaEndereco(endAuto);
+                              }}
+                              className="text-[10px] text-cyan-400 hover:underline cursor-pointer"
+                            >
+                              Preencher do cadastro
+                            </button>
+                          )}
+                        </label>
+                        <input
+                          type="text"
+                          required={solicitarLevaETrazNaAgenda}
+                          value={agendaLevaEndereco}
+                          onChange={(e) => setAgendaLevaEndereco(e.target.value)}
+                          placeholder="Rua, número, bairro e cidade"
+                          className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-xs"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-slate-400">Ponto de Referência / Apto</label>
+                          <input
+                            type="text"
+                            value={agendaLevaComplemento}
+                            onChange={(e) => setAgendaLevaComplemento(e.target.value)}
+                            placeholder="Apto 42, Bloco B"
+                            className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-slate-400">Instruções Motorista</label>
+                          <input
+                            type="text"
+                            value={agendaLevaObs}
+                            onChange={(e) => setAgendaLevaObs(e.target.value)}
+                            placeholder="Chave na portaria"
+                            className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-xs"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-2">

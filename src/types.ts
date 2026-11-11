@@ -20,12 +20,19 @@ export interface ItemFila {
   cliente: string;
   veiculo: string;
   servico: string;
-  status: 'Espera' | 'Lavando' | 'Pronto' | 'Entregue';
+  status: 'Espera' | 'Lavando' | 'Pronto' | 'Entregue' | 'Buscando' | 'Entregando';
   funcionario: string;
   valor: number;
   horaEntrada?: string;
   agendamentoId?: string;
   unidadeId?: string;
+  levaETraz?: boolean;
+  enderecoColeta?: string;
+  complementoEndereco?: string;
+  observacoesLevaETraz?: string;
+  taxaLevaETraz?: number;
+  motoristaResponsavel?: string;
+  statusLevaETraz?: 'solicitado' | 'a_caminho_busca' | 'coletado' | 'lavando' | 'pronto' | 'a_caminho_entrega' | 'entregue' | 'Solicitado' | 'Buscando' | 'Coletado' | 'Lavando' | 'Pronto' | 'Entregando' | 'Entregue';
 }
 
 export interface Funcionario {
@@ -191,12 +198,19 @@ export interface AgendamentoPWA {
   servico: string;
   data: string;
   horario: string;
-  status: 'Pendente' | 'Confirmado' | 'Concluido' | 'Cancelado' | 'Em Atendimento' | 'Vistoriado' | 'Espera' | 'Lavando' | 'Pronto';
+  status: 'Pendente' | 'Confirmado' | 'Concluido' | 'Cancelado' | 'Em Atendimento' | 'Vistoriado' | 'Espera' | 'Lavando' | 'Pronto' | 'Buscando' | 'Entregando' | 'Entregue' | 'Solicitado';
   unidadeId?: string;
   unidadeVinculadaId?: string;
   email?: string;
   valor?: number | string;
   statusLavagem?: string;
+  levaETraz?: boolean;
+  enderecoColeta?: string;
+  complementoEndereco?: string;
+  observacoesLevaETraz?: string;
+  taxaLevaETraz?: number;
+  motoristaResponsavel?: string;
+  statusLevaETraz?: 'solicitado' | 'a_caminho_busca' | 'coletado' | 'lavando' | 'pronto' | 'a_caminho_entrega' | 'entregue' | 'Solicitado' | 'Buscando' | 'Coletado' | 'Lavando' | 'Pronto' | 'Entregando' | 'Entregue';
 }
 
 export interface ServicoLavaJato {

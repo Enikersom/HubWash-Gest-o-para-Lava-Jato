@@ -373,13 +373,17 @@ app.delete("/api/fila/:id", (req, res) => {
 
 // --- UNIDADES / LAVA-JATOS (SaaS) ---
 app.get("/api/unidades", (_req, res) => {
-  res.json(dbMemory.lavaJatos);
+  const filtrados = (dbMemory.lavaJatos || []).filter((u: any) => u && u.id !== 'alef-jato' && !String(u.nomeFantasia || '').toLowerCase().includes('alef'));
+  res.json(filtrados);
 });
 
 app.post("/api/unidades", (req, res) => {
   const novaUnidade = req.body;
   if (!novaUnidade.nomeFantasia || !novaUnidade.id) {
     return res.status(400).json({ error: "Nome Fantasia e ID são obrigatórios" });
+  }
+  if (novaUnidade.id === 'alef-jato' || String(novaUnidade.nomeFantasia || '').toLowerCase().includes('alef')) {
+    return res.status(400).json({ error: "Unidade inválida" });
   }
 
   const formatada = {

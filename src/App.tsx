@@ -170,8 +170,17 @@ function extrairRotasUrl() {
 
   const fullUrl = (search + ' ' + hash + ' ' + pathname).toLowerCase();
 
+  // Verifica se solicitou rota direta para PDV (frente de caixa dedicado)
+  const isPDV = (
+    rotaParam === 'pdv' ||
+    modoParam === 'pdv' ||
+    fullUrl.includes('rota=pdv') ||
+    fullUrl.includes('modo=pdv')
+  );
+
   // Verifica se solicitou painel de gerenciamento
   const isPainel = (
+    isPDV ||
     modoParam === 'painel' ||
     painelParam === '1' ||
     painelParam === 'true' ||
@@ -201,6 +210,7 @@ function extrairRotasUrl() {
     isRotaCadastro: isCadastro,
     isRotaLogin: isLogin,
     isRotaPainelDireto: isPainel,
+    isRotaPDV: isPDV,
     unidadeSlug: unidadeParam || null,
     rotaSlug: rotaParam || null
   };
@@ -211,6 +221,7 @@ export default function App() {
   const isRotaCadastro = rotasUrl.isRotaCadastro;
   const isRotaLogin = rotasUrl.isRotaLogin;
   const isRotaPainelDireto = rotasUrl.isRotaPainelDireto;
+  const isRotaPDV = rotasUrl.isRotaPDV;
   const unidadeSlug = rotasUrl.unidadeSlug;
   const rotaSlug = rotasUrl.rotaSlug;
 
@@ -443,6 +454,7 @@ export default function App() {
       <Suspense fallback={fallbackLoading}>
         <PainelLavaJato
           unidadeNome={unidadeSelecionada}
+          abrirPDVDireto={isRotaPDV}
           onLogout={() => {
             try {
               localStorage.removeItem('hubwash_operador_sessao');

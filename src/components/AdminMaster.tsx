@@ -61,10 +61,16 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
       try {
         const parsed: LavaJato[] = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map(u => ({
-            ...u,
-            statusPlano: u.statusPlano === 'bloqueado' ? 'ativo' : (u.statusPlano || 'ativo')
-          }));
+          const limpos = parsed
+            .filter(u => u && u.id !== 'alef-jato' && !String(u.nomeFantasia || '').toLowerCase().includes('alef'))
+            .map(u => ({
+              ...u,
+              statusPlano: u.statusPlano === 'bloqueado' ? 'ativo' : (u.statusPlano || 'ativo')
+            }));
+          try {
+            localStorage.setItem('hubwash_lava_jatos', JSON.stringify(limpos));
+          } catch {}
+          return limpos;
         }
       } catch (e) {
         console.error(e);
@@ -114,24 +120,6 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
   const [senhaProvisoria, setSenhaProvisoria] = useState('');
   const [modalidadePlano, setModalidadePlano] = useState<'mensal' | 'vitalicio'>('mensal');
   const [valorPlano, setValorPlano] = useState('149.90');
-
-  // SINCRONIZAÇÃO AUTOMÁTICA EM SEGUNDO PLANO COM O CLOUD FIRESTORE
-  useEffect(() => {
-    if (!db || !Array.isArray(lavaJatos) || lavaJatos.length === 0) return;
-
-    // Envio automático contínuo de todas as empresas para o Banco de Dados (Firestore)
-    const timerSync = setTimeout(() => {
-      lavaJatos.forEach(async (u) => {
-        try {
-          await setDoc(doc(db, 'unidades', u.id), u, { merge: true });
-        } catch (err) {
-          console.warn(`[Auto-Sync Firestore] Erro ao gravar unidade ${u.id}:`, err);
-        }
-      });
-    }, 500);
-
-    return () => clearTimeout(timerSync);
-  }, [lavaJatos]);
 
   const mostrarToast = (mensagem: string, tipo: 'sucesso' | 'erro' | 'info' = 'sucesso') => {
     setToast({ mensagem, tipo });
@@ -264,14 +252,19 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
           if (!snapshot.empty) {
             const doFirestore: LavaJato[] = [];
             snapshot.forEach((docItem) => {
-              const d = docItem.data() as LavaJato;
+              const dados = docItem.data();
+              if (docItem.id === 'alef-jato' || String(dados?.nomeFantasia || '').toLowerCase().includes('alef')) {
+                deleteDoc(doc(db, 'unidades', docItem.id)).catch(() => {});
+                return;
+              }
+              const d = dados as LavaJato;
               doFirestore.push({
                 ...d,
                 id: d.id || docItem.id,
                 statusPlano: d.statusPlano || 'ativo'
               });
             });
-            if (!cancelado && doFirestore.length > 0) {
+            if (!cancelado) {
               salvarLavaJatosLocal(doFirestore);
             }
           }

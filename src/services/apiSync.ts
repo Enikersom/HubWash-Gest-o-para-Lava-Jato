@@ -45,8 +45,13 @@ export interface AgendamentoSync {
   horario: string;
   veiculo: string;
   servico: string;
-  status: 'Pendente' | 'Confirmado' | 'Em Andamento' | 'Concluído' | 'Concluido' | 'Cancelado' | 'Em Atendimento' | 'Vistoriado' | 'Espera' | 'Lavando' | 'Pronto' | 'Entregue';
+  status: 'Pendente' | 'Confirmado' | 'Em Andamento' | 'Concluído' | 'Concluido' | 'Cancelado' | 'Em Atendimento' | 'Vistoriado' | 'Espera' | 'Lavando' | 'Pronto' | 'Entregue' | 'Buscando' | 'Entregando' | 'Solicitado';
   createdAt?: string;
+  levaETraz?: boolean;
+  enderecoColeta?: string;
+  complementoEndereco?: string;
+  observacoesLevaETraz?: string;
+  statusLevaETraz?: string;
 }
 
 // Flag de disponibilidade da API local (se estiver no Netlify ou host estático sem backend Node, desativa fetch inútil)
@@ -133,7 +138,10 @@ export async function buscarUnidadesServidor(): Promise<LavaJato[]> {
       cache: 'no-store'
     });
     if (res) {
-      return await res.json();
+      const lista: LavaJato[] = await res.json();
+      if (Array.isArray(lista)) {
+        return lista.filter(u => u && u.id !== 'alef-jato' && !String(u.nomeFantasia || '').toLowerCase().includes('alef'));
+      }
     }
   } catch (err) {
     console.warn('Fallback buscar unidades:', err);

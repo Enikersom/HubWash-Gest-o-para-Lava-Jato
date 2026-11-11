@@ -53,7 +53,12 @@ import {
   Edit3,
   Crown,
   Infinity,
-  Store
+  Store,
+  Truck,
+  Navigation,
+  MapPin,
+  MessageCircle,
+  ExternalLink
 } from 'lucide-react';
 import { db, collection, addDoc, setDoc, onSnapshot, doc, updateDoc, deleteDoc, query, where, orderBy, getDocs, getFirebaseStatus, salvarFirebaseConfig } from '../firebase';
 import { 
@@ -101,11 +106,13 @@ import { formatarCelular, formatarCEP } from '../utils/formatters';
 
 interface PainelLavaJatoProps {
   unidadeNome?: string;
+  abrirPDVDireto?: boolean;
   onLogout: () => void;
 }
 
 export default function PainelLavaJato({
   unidadeNome = 'Pit Stop Lava Jato',
+  abrirPDVDireto = false,
   onLogout
 }: PainelLavaJatoProps) {
   // CONFIGURAÇÃO DO MENU LATERAL RECOLHÍVEL
@@ -113,6 +120,37 @@ export default function PainelLavaJato({
   const [abaAtiva, setAbaAtiva] = useState<
     'fila' | 'pdv' | 'agendamentos' | 'servicos' | 'checklist' | 'relatorio' | 'caixa' | 'produtos' | 'clientes' | 'funcionarios' | 'banner' | 'configuracao'
   >('fila');
+
+  // PÁGINA DEDICADA DE VENDAS DO PDV (FRENTE DE CAIXA ISOLADO PARA NÃO ATRAPALHAR O FLUXO DO LAVA JATO)
+  const [paginaPDVAberta, setPaginaPDVAberta] = useState<boolean>(() => {
+    if (abrirPDVDireto) return true;
+    try {
+      if (typeof window !== 'undefined') {
+        const search = window.location.search || '';
+        const hash = window.location.hash || '';
+        return search.includes('rota=pdv') || hash.includes('rota=pdv') || search.includes('modo=pdv');
+      }
+    } catch {}
+    return false;
+  });
+
+  // Sincroniza se a prop abrirPDVDireto mudar
+  useEffect(() => {
+    if (abrirPDVDireto) {
+      setPaginaPDVAberta(true);
+    }
+  }, [abrirPDVDireto]);
+
+  // Tecla ESC para retornar da página de vendas para o fluxo do lava jato
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && paginaPDVAberta) {
+        setPaginaPDVAberta(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [paginaPDVAberta]);
 
   // Identificação e isolamento multi-inquilino exclusivo da Unidade
   const unidadeSlugSanitizada = useMemo(() => {
@@ -543,6 +581,10 @@ export default function PainelLavaJato({
   const [novoAgendVeiculo, setNovoAgendVeiculo] = useState('');
   const [novoAgendServico, setNovoAgendServico] = useState('Lavagem Completa');
   const [novoAgendHorario, setNovoAgendHorario] = useState('15:00');
+  const [novoAgendLevaETraz, setNovoAgendLevaETraz] = useState(false);
+  const [novoAgendEnderecoColeta, setNovoAgendEnderecoColeta] = useState('');
+  const [novoAgendComplemento, setNovoAgendComplemento] = useState('');
+  const [filtroTipoAgendamento, setFiltroTipoAgendamento] = useState<'todos' | 'leva_e_traz' | 'balcao'>('todos');
 
   // Agendamento atualmente pré-selecionado para abertura direta no Checklist & Fotos
   const [agendamentoSelecionadoParaChecklist, setAgendamentoSelecionadoParaChecklist] = useState<AgendamentoPWA | null>(null);
@@ -777,7 +819,14 @@ export default function PainelLavaJato({
             servico: a.servico || 'Lavagem Completa',
             data: a.data || 'Hoje',
             horario: a.horario || '12:00',
-            status: a.status || 'Pendente'
+            status: a.status || 'Pendente',
+            levaETraz: Boolean(a.levaETraz),
+            statusLevaETraz: a.statusLevaETraz,
+            enderecoColeta: a.enderecoColeta,
+            complementoEndereco: a.complementoEndereco,
+            observacoesLevaETraz: a.observacoesLevaETraz,
+            motoristaResponsavel: a.motoristaResponsavel,
+            taxaLevaETraz: a.taxaLevaETraz
           }));
           setAgendamentos((prev) => {
             const mapa = new Map<string, AgendamentoPWA>();
@@ -836,6 +885,11 @@ export default function PainelLavaJato({
   });
   const [novoBannerTitulo, setNovoBannerTitulo] = useState('');
   const [novoBannerImg, setNovoBannerImg] = useState('');
+  const [novoBannerDescricao, setNovoBannerDescricao] = useState('');
+  const [novoBannerDesconto, setNovoBannerDesconto] = useState('');
+  const [metodoImagemBanner, setMetodoImagemBanner] = useState<'galeria' | 'url'>('galeria');
+  const [carregandoImagemBanner, setCarregandoImagemBanner] = useState(false);
+  const fileInputBannerRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     localStorage.setItem('hubwash_banners', JSON.stringify(banners));
@@ -941,7 +995,14 @@ export default function PainelLavaJato({
                 servico: a.servico || 'Lavagem Completa',
                 data: a.data || 'Hoje',
                 horario: a.horario || '12:00',
-                status: (a.status as any) || 'Pendente'
+                status: (a.status as any) || 'Pendente',
+                levaETraz: Boolean(a.levaETraz),
+                statusLevaETraz: a.statusLevaETraz,
+                enderecoColeta: a.enderecoColeta,
+                complementoEndereco: a.complementoEndereco,
+                observacoesLevaETraz: a.observacoesLevaETraz,
+                motoristaResponsavel: a.motoristaResponsavel,
+                taxaLevaETraz: a.taxaLevaETraz
               };
             });
 
@@ -1082,7 +1143,14 @@ export default function PainelLavaJato({
                   servico: data.servico || 'Lavagem Completa',
                   data: data.data || 'Hoje',
                   horario: data.horario || '12:00',
-                  status: (data.status as any) || 'Pendente'
+                  status: (data.status as any) || 'Pendente',
+                  levaETraz: Boolean(data.levaETraz),
+                  statusLevaETraz: data.statusLevaETraz || (data.levaETraz ? 'Solicitado' : undefined),
+                  enderecoColeta: data.enderecoColeta,
+                  complementoEndereco: data.complementoEndereco,
+                  observacoesLevaETraz: data.observacoesLevaETraz,
+                  motoristaResponsavel: data.motoristaResponsavel,
+                  taxaLevaETraz: data.taxaLevaETraz
                 });
               }
             });
@@ -1518,10 +1586,18 @@ export default function PainelLavaJato({
         ...movimentacoesCaixa
       ]);
 
-      mostrarToast(`✨ Veículo "${itemAlvo.veiculo}" pronto para retirada! R$ ${valorComissao.toFixed(2)} de comissão gerada e R$ ${itemAlvo.valor.toFixed(2)} lançado no Caixa.`, 'sucesso');
+      mostrarToast(`✨ Veículo "${itemAlvo.veiculo}" pronto! R$ ${valorComissao.toFixed(2)} de comissão gerada e R$ ${itemAlvo.valor.toFixed(2)} lançado no Caixa.`, 'sucesso');
     } else if (itemAlvo.status === 'Pronto') {
+      if (itemAlvo.levaETraz) {
+        proximoStatus = 'Entregando';
+        mostrarToast(`🚀 Veículo "${itemAlvo.veiculo}" despachado para entrega no endereço! Cliente notificado no app.`, 'info');
+      } else {
+        proximoStatus = 'Entregue';
+        mostrarToast(`🎉 Veículo "${itemAlvo.veiculo}" finalizado e entregue ao cliente!`, 'sucesso');
+      }
+    } else if (itemAlvo.status === 'Entregando') {
       proximoStatus = 'Entregue';
-      mostrarToast(`🎉 Veículo "${itemAlvo.veiculo}" finalizado e entregue ao cliente!`, 'sucesso');
+      mostrarToast(`🎉 Veículo "${itemAlvo.veiculo}" entregue no endereço com sucesso!`, 'sucesso');
     }
 
     // 1. Atualiza Fila
@@ -1657,7 +1733,14 @@ export default function PainelLavaJato({
       valor: valorNumerico,
       horaEntrada: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
       agendamentoId: ag.id,
-      unidadeId: ag.unidadeId || unidadeLogada || 'padrao'
+      unidadeId: ag.unidadeId || unidadeLogada || 'padrao',
+      levaETraz: ag.levaETraz,
+      statusLevaETraz: ag.levaETraz ? 'Coletado' : undefined,
+      enderecoColeta: ag.enderecoColeta,
+      complementoEndereco: ag.complementoEndereco,
+      observacoesLevaETraz: ag.observacoesLevaETraz,
+      motoristaResponsavel: ag.motoristaResponsavel,
+      taxaLevaETraz: ag.taxaLevaETraz
     };
 
     const novaFila = [novoItem, ...veiculosFila];
@@ -1907,48 +1990,80 @@ export default function PainelLavaJato({
   };
 
   // Atualizar Status do Agendamento com sincronização imediata
-  const handleAtualizarStatusAgendamento = async (id: string, novoStatus: 'Pendente' | 'Confirmado' | 'Espera' | 'Lavando' | 'Pronto' | 'Concluido' | 'Cancelado') => {
-    setAgendamentos((prev) => prev.map((a) => (a.id === id ? { ...a, status: novoStatus } : a)));
+  const handleAtualizarStatusAgendamento = async (
+    id: string,
+    novoStatus: 'Pendente' | 'Confirmado' | 'Espera' | 'Lavando' | 'Pronto' | 'Concluido' | 'Cancelado' | 'Buscando' | 'Entregando' | 'Entregue'
+  ) => {
+    const statusLevaVal: string | undefined = ['Buscando', 'Entregando', 'Entregue'].includes(novoStatus) ? novoStatus : undefined;
+
+    setAgendamentos((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, status: novoStatus, statusLevaETraz: (statusLevaVal as any) || a.statusLevaETraz } : a))
+    );
 
     try {
-      const atualizados = agendamentos.map((a) => (a.id === id ? { ...a, status: novoStatus } : a));
+      const atualizados = agendamentos.map((a) =>
+        a.id === id ? { ...a, status: novoStatus, statusLevaETraz: (statusLevaVal as any) || a.statusLevaETraz } : a
+      );
       localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(atualizados));
       localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(atualizados));
     } catch {}
 
-    window.dispatchEvent(new CustomEvent('hubwash_status_lavagem_atualizado', {
-      detail: { agendamentoId: id, status: novoStatus }
-    }));
+    window.dispatchEvent(
+      new CustomEvent('hubwash_status_lavagem_atualizado', {
+        detail: { agendamentoId: id, status: novoStatus, statusLevaETraz: statusLevaVal }
+      })
+    );
     window.dispatchEvent(new Event('hubwash_agendamento_alterado'));
 
     try {
-      await atualizarStatusAgendamentoServidor(id, novoStatus);
+      await atualizarStatusAgendamentoServidor(id, novoStatus as any);
     } catch {}
 
     if (db) {
       try {
-        await setDoc(doc(db, 'agendamentos', id), {
-          status: novoStatus,
-          statusLavagem: novoStatus,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
+        await setDoc(
+          doc(db, 'agendamentos', id),
+          {
+            status: novoStatus,
+            statusLavagem: novoStatus,
+            ...(statusLevaVal ? { statusLevaETraz: statusLevaVal } : {}),
+            updatedAt: new Date().toISOString()
+          },
+          { merge: true }
+        );
       } catch {
         try {
           await updateDoc(doc(db, 'agendamentos', id), {
             status: novoStatus,
-            statusLavagem: novoStatus
+            statusLavagem: novoStatus,
+            ...(statusLevaVal ? { statusLevaETraz: statusLevaVal } : {})
           });
         } catch {
           try {
             const q = query(collection(db, 'agendamentos'), where('id', '==', id));
             const snap = await getDocs(q);
-            snap.forEach(d => updateDoc(d.ref, { status: novoStatus, statusLavagem: novoStatus }).catch(() => {}));
+            snap.forEach((d) =>
+              updateDoc(d.ref, {
+                status: novoStatus,
+                statusLavagem: novoStatus,
+                ...(statusLevaVal ? { statusLevaETraz: statusLevaVal } : {})
+              }).catch(() => {})
+            );
           } catch {}
         }
       }
     }
 
-    mostrarToast(`Agendamento atualizado para "${novoStatus}"!`, 'sucesso');
+    const toastMsg =
+      novoStatus === 'Buscando'
+        ? '🚚 Motorista a caminho para buscar o veículo! Cliente notificado.'
+        : novoStatus === 'Entregando'
+        ? '🚀 Motorista despachado para entrega no endereço! Cliente notificado.'
+        : novoStatus === 'Entregue'
+        ? '🎉 Veículo entregue no endereço com sucesso!'
+        : `Agendamento atualizado para "${novoStatus}"!`;
+
+    mostrarToast(toastMsg, 'sucesso');
   };
 
   // Cadastrar Cliente Fidelidade (Começa estritamente com 0 Pontos)
@@ -2265,13 +2380,20 @@ export default function PainelLavaJato({
       servico: novoAgendServico,
       data: 'Hoje',
       horario: novoAgendHorario,
-      status: 'Confirmado'
+      status: novoAgendLevaETraz ? 'Solicitado' : 'Confirmado',
+      levaETraz: novoAgendLevaETraz,
+      statusLevaETraz: novoAgendLevaETraz ? 'Solicitado' : undefined,
+      enderecoColeta: novoAgendLevaETraz ? novoAgendEnderecoColeta.trim() : undefined,
+      complementoEndereco: novoAgendLevaETraz && novoAgendComplemento.trim() ? novoAgendComplemento.trim() : undefined
     };
 
     setAgendamentos([novo, ...agendamentos]);
     setNovoAgendCliente('');
     setNovoAgendVeiculo('');
     setNovoAgendTel('');
+    setNovoAgendLevaETraz(false);
+    setNovoAgendEnderecoColeta('');
+    setNovoAgendComplemento('');
 
     try {
       await salvarAgendamentoServidor({
@@ -2285,6 +2407,10 @@ export default function PainelLavaJato({
         data: novo.data,
         horario: novo.horario,
         status: novo.status,
+        levaETraz: novo.levaETraz,
+        statusLevaETraz: novo.statusLevaETraz,
+        enderecoColeta: novo.enderecoColeta,
+        complementoEndereco: novo.complementoEndereco,
         createdAt: new Date().toISOString()
       });
 
@@ -2299,6 +2425,10 @@ export default function PainelLavaJato({
           data: novo.data,
           horario: novo.horario,
           status: novo.status,
+          levaETraz: novo.levaETraz,
+          statusLevaETraz: novo.statusLevaETraz,
+          enderecoColeta: novo.enderecoColeta,
+          complementoEndereco: novo.complementoEndereco,
           createdAt: new Date().toISOString()
         });
       }
@@ -2306,7 +2436,91 @@ export default function PainelLavaJato({
       console.warn('Agendamento salvo localmente:', err);
     }
 
-    mostrarToast(`Agendamento de ${novo.cliente} confirmado para as ${novo.horario}!`, 'sucesso');
+    mostrarToast(
+      novo.levaETraz
+        ? `🚚 Leva e Traz registrado para ${novo.cliente} às ${novo.horario}!`
+        : `Agendamento de ${novo.cliente} confirmado para as ${novo.horario}!`,
+      'sucesso'
+    );
+  };
+
+  // Carregar Imagem da Galeria (PC ou Celular) com Otimização via Canvas
+  const handleUploadImagemBanner = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      mostrarToast('Por favor, selecione um arquivo de imagem válido (PNG, JPG, WebP, etc.).', 'erro');
+      return;
+    }
+
+    if (file.size > 15 * 1024 * 1024) {
+      mostrarToast('A imagem selecionada é muito pesada (máx 15MB).', 'erro');
+      return;
+    }
+
+    setCarregandoImagemBanner(true);
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      const result = event.target?.result as string;
+      if (!result) {
+        setCarregandoImagemBanner(false);
+        return;
+      }
+
+      const img = new Image();
+      img.src = result;
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const maxWidth = 1200;
+          const maxHeight = 700;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > maxWidth || height > maxHeight) {
+            const ratio = Math.min(maxWidth / width, maxHeight / height);
+            width = Math.round(width * ratio);
+            height = Math.round(height * ratio);
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, width, height);
+
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            setNovoBannerImg(dataUrl);
+            mostrarToast('Foto do banner carregada da galeria com sucesso!', 'sucesso');
+          } else {
+            setNovoBannerImg(result);
+            mostrarToast('Foto do banner carregada!', 'sucesso');
+          }
+        } catch (err) {
+          console.warn('Erro ao processar imagem no canvas:', err);
+          setNovoBannerImg(result);
+          mostrarToast('Foto do banner carregada!', 'sucesso');
+        } finally {
+          setCarregandoImagemBanner(false);
+        }
+      };
+
+      img.onerror = () => {
+        setCarregandoImagemBanner(false);
+        mostrarToast('Erro ao abrir o arquivo de imagem selecionado.', 'erro');
+      };
+    };
+
+    reader.onerror = () => {
+      setCarregandoImagemBanner(false);
+      mostrarToast('Erro ao ler arquivo da galeria.', 'erro');
+    };
+
+    reader.readAsDataURL(file);
   };
 
   // Adicionar Banner
@@ -2317,13 +2531,20 @@ export default function PainelLavaJato({
       return;
     }
 
+    if (!novoBannerImg.trim()) {
+      mostrarToast('Por favor, escolha uma foto da galeria ou insira um link para a imagem do banner.', 'erro');
+      return;
+    }
+
     const bannerId = `ban_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const novo: BannerPromocional = {
       id: bannerId,
       titulo: novoBannerTitulo.trim(),
       status: 'Ativo',
-      imagem: novoBannerImg.trim() || 'https://images.unsplash.com/photo-1520340356584-f9917d1eea6f?w=600&auto=format&fit=crop&q=60',
-      unidadeId: unidadeLogada
+      imagem: novoBannerImg.trim(),
+      unidadeId: unidadeLogada,
+      descricao: novoBannerDescricao.trim() || undefined,
+      desconto: novoBannerDesconto.trim() || undefined
     };
 
     const listaAtualizada = [novo, ...banners.filter(b => b.id !== bannerId)];
@@ -2332,10 +2553,16 @@ export default function PainelLavaJato({
       localStorage.setItem('hubwash_banners', JSON.stringify(listaAtualizada));
       if (unidadeLogada) localStorage.setItem(`hubwash_banners_${unidadeLogada}`, JSON.stringify(listaAtualizada));
       window.dispatchEvent(new CustomEvent('hubwash_banners_atualizados', { detail: listaAtualizada }));
+      window.dispatchEvent(new Event('hubwash_banners_atualizados'));
     } catch {}
 
     setNovoBannerTitulo('');
     setNovoBannerImg('');
+    setNovoBannerDescricao('');
+    setNovoBannerDesconto('');
+    if (fileInputBannerRef.current) {
+      fileInputBannerRef.current.value = '';
+    }
     mostrarToast('Novo banner promocional publicado no App Cliente!', 'sucesso');
 
     try {
@@ -2782,7 +3009,7 @@ export default function PainelLavaJato({
           <nav className="p-3 space-y-1">
             {[
               { id: 'fila', label: 'Fila de Lavagem', icon: Layers },
-              { id: 'pdv', label: 'PDV • Caixa Rápido', icon: Store },
+              { id: 'pdv', label: 'PDV • Caixa Rápido', icon: Store, isPDV: true },
               { id: 'agendamentos', label: 'Agendamentos PWA', icon: Calendar },
               { id: 'servicos', label: 'Serviços & Valores', icon: Tag },
               { id: 'checklist', label: 'Checklist & Fotos', icon: CheckSquare },
@@ -2795,21 +3022,37 @@ export default function PainelLavaJato({
               { id: 'configuracao', label: 'Configurações App', icon: Settings },
             ].map((item) => {
               const Icone = item.icon;
-              const ativo = abaAtiva === item.id;
+              const isItemPDV = item.id === 'pdv';
+              const ativo = isItemPDV ? paginaPDVAberta : abaAtiva === item.id;
               return (
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setAbaAtiva(item.id as any)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold tracking-wide transition-all cursor-pointer ${
+                  onClick={() => {
+                    if (isItemPDV) {
+                      setPaginaPDVAberta(true);
+                    } else {
+                      setAbaAtiva(item.id as any);
+                    }
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold tracking-wide transition-all cursor-pointer ${
                     ativo 
                       ? `${temaClasses.bg} text-white shadow-md ${temaClasses.shadow}` 
-                      : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-200'
+                      : isItemPDV
+                        ? 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
+                        : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-200'
                   }`}
-                  title={item.label}
+                  title={isItemPDV ? 'Abrir Terminal de Vendas PDV em Página Dedicada (sem interromper a fila de lavagens)' : item.label}
                 >
-                  <Icone className="w-4 h-4 shrink-0" />
-                  {sidebarAberta && <span className="truncate">{item.label}</span>}
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Icone className="w-4 h-4 shrink-0" />
+                    {sidebarAberta && <span className="truncate">{item.label}</span>}
+                  </div>
+                  {sidebarAberta && isItemPDV && (
+                    <span className="text-[9px] uppercase px-1.5 py-0.5 rounded font-mono font-bold bg-emerald-500/30 text-emerald-200 border border-emerald-500/40 shrink-0">
+                      Abrir ↗
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -2878,6 +3121,18 @@ export default function PainelLavaJato({
             >
               <QrCode size={14} />
               <span className="hidden sm:inline">QR Code de Cadastro</span>
+            </button>
+
+            {/* BOTÃO ABRIR TERMINAL PDV EM PÁGINA DEDICADA */}
+            <button
+              type="button"
+              onClick={() => setPaginaPDVAberta(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs font-semibold transition cursor-pointer shadow-sm shadow-emerald-950/50"
+              title="Abrir Terminal de Vendas PDV em página dedicada (sem interromper o fluxo da fila de lavagens)"
+            >
+              <Store size={14} className="text-emerald-400" />
+              <span className="hidden sm:inline">PDV Vendas</span>
+              <ExternalLink size={12} className="opacity-80" />
             </button>
 
             {/* BOTÃO DE RETORNO AO LOGIN SEMPRE ATIVO NO TOPO */}
@@ -3029,13 +3284,29 @@ export default function PainelLavaJato({
                       String(v?.veiculo || '').toLowerCase().includes(buscaFila.toLowerCase())
                     )
                     .map((item) => {
-                      const statusStyles = {
-                        Espera: { bg: 'bg-amber-500/10 border-amber-500/30 text-amber-400', nextText: 'Iniciar Lavagem', nextIcon: Play },
-                        Lavando: { bg: 'bg-blue-500/10 border-blue-500/30 text-blue-400', nextText: 'Marcar Pronto', nextIcon: CheckCircle2 },
-                        Pronto: { bg: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400', nextText: 'Entregar Veículo', nextIcon: Check },
-                        Entregue: { bg: 'bg-slate-800/60 border-slate-700/60 text-slate-400', nextText: 'Finalizado', nextIcon: CheckCircle2 }
-                      }[item.status];
-
+                      const getEstiloFila = () => {
+                        switch (item.status) {
+                          case 'Espera':
+                            return { bg: 'bg-amber-500/10 border-amber-500/30 text-amber-400', nextText: 'Iniciar Lavagem', nextIcon: Play };
+                          case 'Lavando':
+                            return { bg: 'bg-blue-500/10 border-blue-500/30 text-blue-400', nextText: 'Marcar Pronto', nextIcon: CheckCircle2 };
+                          case 'Pronto':
+                            return {
+                              bg: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400',
+                              nextText: item.levaETraz ? 'Despachar p/ Entrega' : 'Entregar Veículo',
+                              nextIcon: item.levaETraz ? Navigation : Check
+                            };
+                          case 'Entregando':
+                            return { bg: 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400 animate-pulse', nextText: 'Confirmar Entrega Realizada', nextIcon: CheckCircle2 };
+                          case 'Buscando':
+                            return { bg: 'bg-amber-500/10 border-amber-500/30 text-amber-400', nextText: 'Recepcionar no Pátio', nextIcon: Play };
+                          case 'Entregue':
+                            return { bg: 'bg-slate-800/60 border-slate-700/60 text-slate-400', nextText: 'Finalizado', nextIcon: CheckCircle2 };
+                          default:
+                            return { bg: 'bg-slate-800 border-slate-700 text-slate-400', nextText: 'Avançar', nextIcon: Play };
+                        }
+                      };
+                      const statusStyles = getEstiloFila();
                       const IconeBotao = statusStyles.nextIcon;
 
                       return (
@@ -3045,9 +3316,17 @@ export default function PainelLavaJato({
                         >
                           <div className="flex items-start justify-between gap-2 border-b border-slate-800/80 pb-2.5">
                             <div>
-                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${statusStyles.bg}`}>
-                                {item.status}
-                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${statusStyles.bg}`}>
+                                  {item.status}
+                                </span>
+                                {item.levaETraz && (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-amber-500/15 border border-amber-500/40 text-amber-300 flex items-center gap-1">
+                                    <Truck size={10} />
+                                    <span>LEVA E TRAZ</span>
+                                  </span>
+                                )}
+                              </div>
                               <h4 className="text-sm font-bold text-white mt-1.5">{item.veiculo}</h4>
                               <p className="text-xs text-slate-400">{item.cliente}</p>
                             </div>
@@ -3077,13 +3356,44 @@ export default function PainelLavaJato({
                             </div>
                           </div>
 
+                          {/* Box de Endereço de Entrega para Veículos com Leva e Traz */}
+                          {item.levaETraz && item.enderecoColeta && (
+                            <div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-300 flex items-start justify-between gap-2">
+                              <div className="space-y-0.5 min-w-0">
+                                <span className="text-[9px] text-slate-500 block uppercase font-mono flex items-center gap-1">
+                                  <MapPin size={10} className="text-amber-400" /> Endereço de Retorno
+                                </span>
+                                <p className="text-slate-200 truncate">{item.enderecoColeta}</p>
+                                {item.complementoEndereco && (
+                                  <p className="text-[10px] text-slate-400">Ref: {item.complementoEndereco}</p>
+                                )}
+                              </div>
+                              <a
+                                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.enderecoColeta)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-[10px] font-bold flex items-center gap-1 shrink-0"
+                                title="Abrir rota no Google Maps"
+                              >
+                                <Navigation size={11} />
+                                <span>Rota</span>
+                              </a>
+                            </div>
+                          )}
+
                           {item.status !== 'Entregue' ? (
                             <button
                               type="button"
                               onClick={() => avancarStatusFila(item.id)}
-                              className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                              className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
+                                item.status === 'Pronto' && item.levaETraz
+                                  ? 'bg-amber-600 hover:bg-amber-500 text-white border border-amber-500 shadow-amber-900/30'
+                                  : item.status === 'Entregando'
+                                  ? 'bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-500 animate-pulse'
+                                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700'
+                              }`}
                             >
-                              <IconeBotao size={14} className="text-cyan-400" />
+                              <IconeBotao size={14} className={item.status === 'Pronto' && item.levaETraz ? "text-white" : "text-cyan-400"} />
                               <span>{statusStyles.nextText}</span>
                             </button>
                           ) : (
@@ -3179,9 +3489,50 @@ export default function PainelLavaJato({
                         value={novoAgendHorario}
                         onChange={(e) => setNovoAgendHorario(e.target.value)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white focus:outline-none focus:border-blue-500 cursor-pointer"
-                      >
-                      </input>
+                      />
                     </div>
+                  </div>
+
+                  {/* Toggle Leva e Traz no Novo Agendamento */}
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800/90 space-y-2.5">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={novoAgendLevaETraz}
+                        onChange={(e) => setNovoAgendLevaETraz(e.target.checked)}
+                        className="w-4 h-4 rounded text-amber-500 focus:ring-amber-400 border-slate-700 bg-slate-900"
+                      />
+                      <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <Truck size={14} className="text-amber-400" />
+                        <span>Solicitação de Leva e Traz</span>
+                      </span>
+                    </label>
+
+                    {novoAgendLevaETraz && (
+                      <div className="space-y-2 pt-1.5 border-t border-slate-800 animate-in fade-in duration-150">
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-1">Endereço de Coleta / Entrega *</label>
+                          <input
+                            type="text"
+                            required={novoAgendLevaETraz}
+                            value={novoAgendEnderecoColeta}
+                            onChange={(e) => setNovoAgendEnderecoColeta(e.target.value)}
+                            placeholder="Rua, número, bairro e cidade"
+                            className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-1">Complemento / Ponto de Ref.</label>
+                          <input
+                            type="text"
+                            value={novoAgendComplemento}
+                            onChange={(e) => setNovoAgendComplemento(e.target.value)}
+                            placeholder="Apto 23, interfone, etc."
+                            className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-xs"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <button
@@ -3212,86 +3563,271 @@ export default function PainelLavaJato({
                   </button>
                 </div>
 
+                {/* Filtro: Todos | 🚚 Leva e Traz | 🚗 No Balcão */}
+                <div className="flex items-center gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold overflow-x-auto">
+                  <button
+                    type="button"
+                    onClick={() => setFiltroTipoAgendamento('todos')}
+                    className={`px-3 py-1.5 rounded-lg transition cursor-pointer whitespace-nowrap ${
+                      filtroTipoAgendamento === 'todos' ? 'bg-slate-800 text-white font-bold shadow-sm' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Todos ({agendamentos.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFiltroTipoAgendamento('leva_e_traz')}
+                    className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                      filtroTipoAgendamento === 'leva_e_traz' ? 'bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 shadow-sm' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Truck size={13} className="text-amber-400" />
+                    <span>Leva e Traz ({agendamentos.filter(a => a.levaETraz).length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFiltroTipoAgendamento('balcao')}
+                    className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                      filtroTipoAgendamento === 'balcao' ? 'bg-blue-500/20 text-blue-300 font-bold border border-blue-500/40 shadow-sm' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Car size={13} className="text-blue-400" />
+                    <span>Balcão ({agendamentos.filter(a => !a.levaETraz).length})</span>
+                  </button>
+                </div>
+
                 <div className="space-y-3">
-                  {agendamentos.length === 0 && (
+                  {agendamentos.filter(a => {
+                    if (filtroTipoAgendamento === 'leva_e_traz') return Boolean(a.levaETraz);
+                    if (filtroTipoAgendamento === 'balcao') return !a.levaETraz;
+                    return true;
+                  }).length === 0 && (
                     <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 text-center space-y-2">
                       <Calendar className="w-8 h-8 text-slate-500 mx-auto" />
-                      <p className="text-xs font-bold text-white">Nenhum agendamento online no momento</p>
+                      <p className="text-xs font-bold text-white">Nenhum agendamento encontrado para este filtro</p>
                       <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
                         Novos agendamentos feitos no celular aparecem aqui no mesmo instante. Se acabou de cadastrar no celular, clique no botão acima para sincronizar.
                       </p>
                     </div>
                   )}
-                  {agendamentos.map((ag) => (
+                  {agendamentos
+                    .filter(a => {
+                      if (filtroTipoAgendamento === 'leva_e_traz') return Boolean(a.levaETraz);
+                      if (filtroTipoAgendamento === 'balcao') return !a.levaETraz;
+                      return true;
+                    })
+                    .map((ag) => (
                     <div
                       key={ag.id}
-                      className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg"
+                      className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col items-start justify-between gap-3 shadow-lg hover:border-slate-700/80 transition"
                     >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-white text-sm">{ag.cliente}</span>
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/10 border border-blue-500/30 text-blue-400">
-                            {ag.status}
+                      <div className="w-full space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white text-sm">{ag.cliente}</span>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                              ag.status === 'Concluido' || ag.status === 'Entregue'
+                                ? 'bg-purple-500/10 text-purple-300 border-purple-500/30'
+                                : ag.status === 'Entregando'
+                                ? 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30 animate-pulse'
+                                : ag.status === 'Buscando'
+                                ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 animate-pulse'
+                                : ag.status === 'Pronto'
+                                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                                : ag.status === 'Lavando'
+                                ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+                                : ag.status === 'Espera'
+                                ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                                : 'bg-blue-500/10 border border-blue-500/30 text-blue-400'
+                            }`}>
+                              {ag.status}
+                            </span>
+
+                            {ag.levaETraz && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-amber-500/20 border border-amber-500/40 text-amber-300 flex items-center gap-1">
+                                <Truck size={10} />
+                                <span>LEVA E TRAZ</span>
+                              </span>
+                            )}
+                          </div>
+
+                          <span className="text-[11px] font-mono text-cyan-400 font-bold bg-slate-950 px-2 py-0.5 rounded-lg border border-slate-800">
+                            {ag.data} às {ag.horario}
                           </span>
                         </div>
+
                         <p className="text-xs text-slate-300">
                           {ag.veiculo} • <strong className="text-cyan-400">{ag.servico}</strong>
                         </p>
-                        <p className="text-[11px] text-slate-500">
-                          Horário: <span className="text-slate-300 font-semibold">{ag.data} às {ag.horario}</span> • Tel: <span className="font-mono text-slate-300 font-medium">{ag.telefone ? formatarCelular(ag.telefone) : 'Não informado'}</span>
+
+                        <p className="text-[11px] text-slate-400">
+                          Tel: <span className="font-mono text-slate-200 font-medium">{ag.telefone ? formatarCelular(ag.telefone) : 'Não informado'}</span>
                         </p>
+
+                        {/* Endereço de Coleta / Entrega para Leva e Traz */}
+                        {ag.levaETraz && ag.enderecoColeta && (
+                          <div className="p-2.5 rounded-xl bg-slate-950/90 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                            <div className="space-y-0.5 min-w-0">
+                              <span className="text-[9px] text-slate-500 uppercase font-mono block flex items-center gap-1">
+                                <MapPin size={11} className="text-amber-400" /> Endereço de Coleta e Devolução
+                              </span>
+                              <p className="font-medium text-slate-200 break-words">{ag.enderecoColeta}</p>
+                              {ag.complementoEndereco && (
+                                <p className="text-[10px] text-slate-400">Ponto de Referência: {ag.complementoEndereco}</p>
+                              )}
+                              {ag.observacoesLevaETraz && (
+                                <p className="text-[10px] text-amber-300/80 italic">Obs: {ag.observacoesLevaETraz}</p>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                              <a
+                                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(ag.enderecoColeta)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-2.5 py-1.5 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-[11px] font-bold flex items-center gap-1"
+                                title="Abrir localização no Google Maps"
+                              >
+                                <Navigation size={12} />
+                                <span>Maps</span>
+                              </a>
+
+                              {ag.telefone && (
+                                <a
+                                  href={`https://wa.me/55${ag.telefone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${ag.cliente}! Somos da equipe do lava jato. Entramos em contato sobre o Leva e Traz do seu veículo ${ag.veiculo}.`)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-bold flex items-center gap-1"
+                                  title="Enviar mensagem no WhatsApp"
+                                >
+                                  <MessageCircle size={12} />
+                                  <span>WhatsApp</span>
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 self-end sm:self-auto">
-                        <button
-                          type="button"
-                          onClick={() => puxarAgendamentoParaFila(ag)}
-                          className="px-2.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition cursor-pointer flex items-center gap-1"
-                          title="Inserir diretamente na Fila de Lavagem (Status: Espera)"
-                        >
-                          <Play size={13} />
-                          <span>Puxar p/ Fila</span>
-                        </button>
+                      {/* Botões de Ação do Agendamento */}
+                      <div className="w-full pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {/* Ações contextuais de Leva e Traz */}
+                          {ag.levaETraz ? (
+                            <>
+                              {(ag.status === 'Pendente' || ag.status === 'Solicitado') && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleAtualizarStatusAgendamento(ag.id, 'Buscando')}
+                                  className="px-2.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-sm"
+                                  title="Avisar cliente que o motorista está a caminho para buscar o veículo"
+                                >
+                                  <Truck size={13} className="text-amber-400" />
+                                  <span>Despachar Coleta (A Caminho)</span>
+                                </button>
+                              )}
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAgendamentoSelecionadoParaChecklist(ag);
-                            setAbaAtiva('checklist');
-                            mostrarToast(`Veículo de ${ag.cliente} reservado no Checklist para fotos!`, 'sucesso');
-                          }}
-                          className="px-2.5 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-semibold transition cursor-pointer flex items-center gap-1.5"
-                          title="Abrir no Checklist e Fotografar o Veículo"
-                        >
-                          <Camera size={13} className="text-cyan-400" />
-                          <span>Vistoriar & Fotos</span>
-                        </button>
+                              {ag.status === 'Buscando' && (
+                                <button
+                                  type="button"
+                                  onClick={() => puxarAgendamentoParaFila(ag)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-sm"
+                                  title="Veículo coletado! Inserir na Fila de Lavagem no Pátio"
+                                >
+                                  <Play size={13} className="text-emerald-400" />
+                                  <span>Coletado → Puxar p/ Fila</span>
+                                </button>
+                              )}
 
-                        <button
-                          type="button"
-                          onClick={() => handlePontuarAgendamento(ag)}
-                          className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-semibold transition cursor-pointer flex items-center gap-1"
-                          title="Enviar +1 Ponto de Fidelidade para o Cliente"
-                        >
-                          <Sparkles size={13} className="text-amber-400" />
-                          <span>+1 Ponto</span>
-                        </button>
+                              {ag.status === 'Pronto' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleAtualizarStatusAgendamento(ag.id, 'Entregando')}
+                                  className="px-2.5 py-1.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-sm animate-pulse"
+                                  title="Despachar motorista para devolver o veículo no endereço do cliente"
+                                >
+                                  <Navigation size={13} className="text-indigo-400" />
+                                  <span>Despachar Entrega (A Caminho)</span>
+                                </button>
+                              )}
 
-                        <button
-                          type="button"
-                          onClick={() => handleAtualizarStatusAgendamento(ag.id, ag.status === 'Confirmado' ? 'Concluido' : 'Confirmado')}
-                          className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-1 ${
-                            ag.status === 'Concluido'
-                              ? 'bg-purple-500/10 text-purple-300 border border-purple-500/30'
-                              : ag.status === 'Confirmado'
-                              ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
-                              : 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                          }`}
-                          title="Alterar Status"
-                        >
-                          <CheckCircle2 size={13} />
-                          <span>{ag.status === 'Confirmado' ? 'Concluir' : ag.status === 'Concluido' ? 'Concluído' : 'Confirmar'}</span>
-                        </button>
+                              {ag.status === 'Entregando' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleAtualizarStatusAgendamento(ag.id, 'Concluido')}
+                                  className="px-2.5 py-1.5 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/30 text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-sm"
+                                  title="Confirmar entrega do veículo realizada com sucesso"
+                                >
+                                  <CheckCircle2 size={13} className="text-purple-400" />
+                                  <span>Confirmar Entrega</span>
+                                </button>
+                              )}
+
+                              {(ag.status === 'Pendente' || ag.status === 'Confirmado') && (
+                                <button
+                                  type="button"
+                                  onClick={() => puxarAgendamentoParaFila(ag)}
+                                  className="px-2 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer flex items-center gap-1"
+                                >
+                                  <Play size={12} />
+                                  <span>Puxar p/ Fila</span>
+                                </button>
+                              )}
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => puxarAgendamentoParaFila(ag)}
+                              className="px-2.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition cursor-pointer flex items-center gap-1"
+                              title="Inserir diretamente na Fila de Lavagem (Status: Espera)"
+                            >
+                              <Play size={13} />
+                              <span>Puxar p/ Fila</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAgendamentoSelecionadoParaChecklist(ag);
+                              setAbaAtiva('checklist');
+                              mostrarToast(`Veículo de ${ag.cliente} reservado no Checklist para fotos!`, 'sucesso');
+                            }}
+                            className="px-2.5 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-semibold transition cursor-pointer flex items-center gap-1.5"
+                            title="Abrir no Checklist e Fotografar o Veículo"
+                          >
+                            <Camera size={13} className="text-cyan-400" />
+                            <span>Vistoriar</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handlePontuarAgendamento(ag)}
+                            className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-semibold transition cursor-pointer flex items-center gap-1"
+                            title="Enviar +1 Ponto de Fidelidade para o Cliente"
+                          >
+                            <Sparkles size={13} className="text-amber-400" />
+                            <span>+1 Ponto</span>
+                          </button>
+
+                          {!ag.levaETraz && (
+                            <button
+                              type="button"
+                              onClick={() => handleAtualizarStatusAgendamento(ag.id, ag.status === 'Confirmado' ? 'Concluido' : 'Confirmado')}
+                              className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-1 ${
+                                ag.status === 'Concluido'
+                                  ? 'bg-purple-500/10 text-purple-300 border border-purple-500/30'
+                                  : ag.status === 'Confirmado'
+                                  ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
+                                  : 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                              }`}
+                              title="Alterar Status"
+                            >
+                              <CheckCircle2 size={13} />
+                              <span>{ag.status === 'Confirmado' ? 'Concluir' : ag.status === 'Concluido' ? 'Concluído' : 'Confirmar'}</span>
+                            </button>
+                          )}
+                        </div>
 
                         <button
                           type="button"
@@ -3313,38 +3849,67 @@ export default function PainelLavaJato({
           {/* ABA: FRENTE DE CAIXA (PDV) */}
           {/* ========================================== */}
           {abaAtiva === 'pdv' && (
-            <ModuloPDV
-              produtos={produtos}
-              clientes={clientes}
-              veiculosFila={veiculosFila}
-              vendasHistorico={vendasPDV}
-              unidadeId={unidadeLogada}
-              unidadeNome={nomeLavaJato}
-              onAtualizarEstoque={(produtoId: string, novoEstoque: number) => {
-                setProdutos(prev => {
-                  const atualizados = prev.map(p => p.id === produtoId ? { ...p, estoque: novoEstoque } : p);
-                  try {
-                    localStorage.setItem('hubwash_produtos', JSON.stringify(atualizados));
-                  } catch {}
-                  return atualizados;
-                });
-              }}
-              onRegistrarVenda={handleRegistrarVenda}
-              onAdicionarAoCaixa={(valor: number, descricao: string) => {
-                setMovimentacoesCaixa(prev => [
-                  {
-                    id: `pdv_${Date.now()}`,
-                    descricao,
-                    tipo: 'entrada',
-                    valor,
-                    data: 'Hoje'
-                  },
-                  ...prev
-                ]);
-              }}
-              onIrParaCadastroProdutos={() => setAbaAtiva('produtos')}
-              temaClasses={temaClasses}
-            />
+            <div className="space-y-4">
+              <div className="bg-gradient-to-r from-emerald-950/70 via-slate-900 to-slate-900 border border-emerald-500/30 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xl">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-11 h-11 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                    <Store size={22} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      Terminal de Vendas PDV Isolado
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
+                        Recomendado
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Abra a página dedicada de vendas para operar o caixa sem interromper o fluxo operacional da fila de lavagens.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPaginaPDVAberta(true)}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition cursor-pointer flex items-center gap-2 shadow-lg shadow-emerald-950/50 shrink-0"
+                >
+                  <ExternalLink size={15} />
+                  <span>Abrir em Página Dedicada</span>
+                </button>
+              </div>
+
+              <ModuloPDV
+                produtos={produtos}
+                clientes={clientes}
+                veiculosFila={veiculosFila}
+                vendasHistorico={vendasPDV}
+                unidadeId={unidadeLogada}
+                unidadeNome={nomeLavaJato}
+                onAtualizarEstoque={(produtoId: string, novoEstoque: number) => {
+                  setProdutos(prev => {
+                    const atualizados = prev.map(p => p.id === produtoId ? { ...p, estoque: novoEstoque } : p);
+                    try {
+                      localStorage.setItem('hubwash_produtos', JSON.stringify(atualizados));
+                    } catch {}
+                    return atualizados;
+                  });
+                }}
+                onRegistrarVenda={handleRegistrarVenda}
+                onAdicionarAoCaixa={(valor: number, descricao: string) => {
+                  setMovimentacoesCaixa(prev => [
+                    {
+                      id: `pdv_${Date.now()}`,
+                      descricao,
+                      tipo: 'entrada',
+                      valor,
+                      data: 'Hoje'
+                    },
+                    ...prev
+                  ]);
+                }}
+                onIrParaCadastroProdutos={() => setAbaAtiva('produtos')}
+                temaClasses={temaClasses}
+              />
+            </div>
           )}
 
           {/* ========================================== */}
@@ -4073,7 +4638,7 @@ export default function PainelLavaJato({
                 });
               }}
               onAjustarEstoque={handleAjustarEstoque}
-              onAbrirPDV={() => setAbaAtiva('pdv')}
+              onAbrirPDV={() => setPaginaPDVAberta(true)}
               temaClasses={temaClasses}
             />
           )}
@@ -4238,33 +4803,196 @@ export default function PainelLavaJato({
                   <ImageIcon className="w-4 h-4 text-cyan-400" /> Publicar Novo Banner
                 </h3>
 
-                <form onSubmit={handleAdicionarBanner} className="space-y-3 text-xs">
+                <form onSubmit={handleAdicionarBanner} className="space-y-4 text-xs">
                   <div>
-                    <label className="block text-slate-400 font-medium mb-1">Título da Promoção *</label>
+                    <label className="block text-slate-300 font-semibold mb-1">Título da Promoção *</label>
                     <input
                       type="text"
                       value={novoBannerTitulo}
                       onChange={(e) => setNovoBannerTitulo(e.target.value)}
                       placeholder="Ex: Quarta com Cera Grátis"
                       required
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-cyan-500 placeholder:text-slate-600"
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-slate-400 font-medium mb-1">URL da Imagem (ou Unsplash)</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-slate-400 font-medium mb-1">Etiqueta / Destaque</label>
+                      <input
+                        type="text"
+                        value={novoBannerDesconto}
+                        onChange={(e) => setNovoBannerDesconto(e.target.value)}
+                        placeholder="Ex: 20% OFF ou Especial"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white focus:outline-none focus:border-cyan-500 placeholder:text-slate-600 text-[11px]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 font-medium mb-1">Descrição Curta</label>
+                      <input
+                        type="text"
+                        value={novoBannerDescricao}
+                        onChange={(e) => setNovoBannerDescricao(e.target.value)}
+                        placeholder="Ex: Válido hoje no app"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white focus:outline-none focus:border-cyan-500 placeholder:text-slate-600 text-[11px]"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Seletor do Método de Imagem */}
+                  <div className="space-y-2 pt-1 border-t border-slate-800/80">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-slate-300 font-semibold">Imagem do Banner *</label>
+                      <span className="text-[10px] text-slate-500">Proporção 16:9 recomendada</span>
+                    </div>
+
+                    {/* Abas de Escolha: Galeria (Padrão) vs Link URL */}
+                    <div className="grid grid-cols-2 p-1 bg-slate-950 border border-slate-800 rounded-xl gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setMetodoImagemBanner('galeria')}
+                        className={`py-1.5 px-2 rounded-lg font-bold text-[11px] transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                          metodoImagemBanner === 'galeria'
+                            ? 'bg-cyan-600 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Camera size={13} />
+                        <span>Galeria (PC / Celular)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setMetodoImagemBanner('url')}
+                        className={`py-1.5 px-2 rounded-lg font-bold text-[11px] transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                          metodoImagemBanner === 'url'
+                            ? 'bg-cyan-600 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <ExternalLink size={13} />
+                        <span>Link / URL</span>
+                      </button>
+                    </div>
+
+                    {/* Input Oculto de Arquivo da Galeria */}
                     <input
-                      type="text"
-                      value={novoBannerImg}
-                      onChange={(e) => setNovoBannerImg(e.target.value)}
-                      placeholder="https://images.unsplash.com/..."
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                      ref={fileInputBannerRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleUploadImagemBanner}
+                      className="hidden"
                     />
+
+                    {/* Opção 1: Galeria PC / Celular */}
+                    {metodoImagemBanner === 'galeria' && (
+                      <div className="space-y-2">
+                        {novoBannerImg ? (
+                          <div className="relative rounded-2xl overflow-hidden border border-cyan-500/40 bg-slate-950 shadow-xl group">
+                            <img
+                              src={novoBannerImg}
+                              alt="Pré-visualização do Banner"
+                              className="w-full h-36 object-cover"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent p-3 flex flex-col justify-between">
+                              <div className="flex items-center justify-between">
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/90 text-white shadow-sm flex items-center gap-1">
+                                  <Check size={11} />
+                                  Foto Carregada com Sucesso
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setNovoBannerImg('');
+                                    if (fileInputBannerRef.current) fileInputBannerRef.current.value = '';
+                                  }}
+                                  className="p-1.5 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white transition cursor-pointer shadow"
+                                  title="Remover Imagem"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                              <div className="flex items-center justify-between pt-2">
+                                <span className="text-[11px] font-semibold text-slate-300 truncate max-w-[65%]">
+                                  Pronto para publicar
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => fileInputBannerRef.current?.click()}
+                                  className="px-2.5 py-1 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-cyan-300 border border-cyan-500/40 text-[10px] font-bold transition cursor-pointer flex items-center gap-1"
+                                >
+                                  <Upload size={11} />
+                                  <span>Trocar Foto</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            onClick={() => fileInputBannerRef.current?.click()}
+                            className="border-2 border-dashed border-cyan-500/40 hover:border-cyan-400 bg-cyan-950/15 hover:bg-cyan-950/30 rounded-2xl p-5 text-center cursor-pointer transition-all group"
+                          >
+                            <div className="w-12 h-12 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center mx-auto mb-2 group-hover:scale-110 transition-transform">
+                              {carregandoImagemBanner ? (
+                                <RefreshCw className="w-5 h-5 animate-spin" />
+                              ) : (
+                                <Upload className="w-5 h-5" />
+                              )}
+                            </div>
+                            <p className="text-xs font-bold text-white">
+                              {carregandoImagemBanner ? 'Otimizando imagem...' : 'Escolher Foto da Galeria'}
+                            </p>
+                            <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">
+                              Toque para selecionar do seu <strong>celular</strong> ou <strong>computador</strong> (PNG, JPG, WebP)
+                            </p>
+                            <div className="mt-2.5 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-cyan-600/20 text-cyan-300 font-bold text-[11px] border border-cyan-500/40 group-hover:bg-cyan-600 group-hover:text-white transition">
+                              <Camera size={13} />
+                              <span>Abrir Galeria / Câmera</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Opção 2: Inserir Link / URL */}
+                    {metodoImagemBanner === 'url' && (
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          value={novoBannerImg}
+                          onChange={(e) => setNovoBannerImg(e.target.value)}
+                          placeholder="https://images.unsplash.com/... ou link direto da imagem"
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500 placeholder:text-slate-600 text-xs"
+                        />
+                        {novoBannerImg && (
+                          <div className="relative rounded-xl overflow-hidden border border-slate-800 h-28 bg-slate-950">
+                            <img
+                              src={novoBannerImg}
+                              alt="Prévia URL"
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                const target = e.currentTarget;
+                                target.style.display = 'none';
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setNovoBannerImg('')}
+                              className="absolute top-2 right-2 p-1.5 rounded-lg bg-rose-600/90 text-white"
+                              title="Limpar Link"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <button
                     type="submit"
-                    className={`w-full py-2.5 px-4 ${temaClasses.bg} text-white font-bold rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-1.5`}
+                    disabled={carregandoImagemBanner}
+                    className={`w-full py-2.5 px-4 ${temaClasses.bg} text-white font-bold rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50`}
                   >
                     <Upload size={15} />
                     <span>Publicar no App Cliente</span>
@@ -4289,13 +5017,31 @@ export default function PainelLavaJato({
                         alt={b.titulo}
                         className="w-full h-36 object-cover"
                         referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          if (!target.src.includes('photo-1520340356584-f9917d1eea6f')) {
+                            target.src = 'https://images.unsplash.com/photo-1520340356584-f9917d1eea6f?w=600&auto=format&fit=crop&q=60';
+                          }
+                        }}
                       />
                       <div className="p-4 pt-0 space-y-3">
                         <div className="flex items-start justify-between gap-2">
-                          <h4 className="text-xs font-bold text-white">{b.titulo}</h4>
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${b.status === 'Ativo' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
-                            {b.status}
-                          </span>
+                          <div className="space-y-0.5">
+                            <h4 className="text-xs font-bold text-white">{b.titulo}</h4>
+                            {b.descricao && (
+                              <p className="text-[11px] text-slate-400 line-clamp-1">{b.descricao}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {b.desconto && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                                {b.desconto}
+                              </span>
+                            )}
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${b.status === 'Ativo' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
+                              {b.status}
+                            </span>
+                          </div>
                         </div>
 
                         <div className="flex items-center justify-between pt-2 border-t border-slate-800">
@@ -4703,6 +5449,142 @@ export default function PainelLavaJato({
 
         </main>
       </div>
+
+      {/* ========================================================================= */}
+      {/* PÁGINA DEDICADA DE VENDAS DO PDV (ISOLADA DO FLUXO DO LAVA JATO) */}
+      {/* ========================================================================= */}
+      {paginaPDVAberta && (
+        <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col overflow-hidden text-slate-100">
+          {/* HEADER DO TERMINAL PDV */}
+          <header className="bg-slate-900/95 backdrop-blur border-b border-slate-800 px-3 sm:px-6 py-3 flex items-center justify-between shrink-0 shadow-lg z-20">
+            {/* LADO ESQUERDO: VOLTAR AO LAVA JATO & STATUS */}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setPaginaPDVAberta(false)}
+                className="inline-flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-slate-700 transition cursor-pointer shadow-md group"
+                title="Retornar à tela de lavagens e pátio sem perder nenhum dado (Atalho: tecla Esc)"
+              >
+                <ArrowLeft size={16} className="text-blue-400 group-hover:-translate-x-0.5 transition-transform" />
+                <span className="hidden xs:inline">Voltar ao Lava Jato</span>
+                <span className="xs:hidden">Voltar</span>
+                {veiculosFila.filter(v => v.status !== 'Entregue').length > 0 && (
+                  <span className="bg-blue-600/30 border border-blue-500/40 text-blue-300 px-2 py-0.5 rounded-full text-[11px] font-mono font-bold flex items-center gap-1">
+                    <Car size={11} />
+                    <span>{veiculosFila.filter(v => v.status !== 'Entregue').length} na fila</span>
+                  </span>
+                )}
+              </button>
+
+              <div className="hidden sm:flex items-center gap-2.5 pl-3 border-l border-slate-800">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+                  <Store size={18} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h1 className="text-sm font-bold text-white leading-none">{nomeLavaJato}</h1>
+                    <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 rounded-full font-semibold">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      Caixa Aberto
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5">Terminal de Vendas PDV • Frente de Caixa</p>
+                </div>
+              </div>
+            </div>
+
+            {/* CENTRO: RESUMO DE VENDAS DO DIA */}
+            <div className="hidden md:flex items-center gap-3 px-3 py-1.5 rounded-xl bg-slate-800/60 border border-slate-700/60 text-xs">
+              <div className="flex items-center gap-1.5 text-slate-400">
+                <DollarSign size={13} className="text-emerald-400" />
+                <span>Vendas Hoje:</span>
+                <strong className="text-emerald-400 font-mono text-sm">
+                  R$ {vendasPDV.reduce((acc, v) => acc + (Number(v.total) || 0), 0).toFixed(2).replace('.', ',')}
+                </strong>
+              </div>
+              <span className="text-slate-600">|</span>
+              <span className="text-slate-400 font-mono">
+                {vendasPDV.length} {vendasPDV.length === 1 ? 'venda' : 'vendas'}
+              </span>
+            </div>
+
+            {/* LADO DIREITO: NOVA ABA, VOLTAR AO LOGIN E FECHAR */}
+            <div className="flex items-center gap-2">
+              <a
+                href={`?modo=painel&rota=pdv&unidade=${encodeURIComponent(unidadeLogada)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hidden lg:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 text-xs font-medium transition cursor-pointer"
+                title="Abrir PDV em uma nova aba para monitor secundário ou tablet do caixa"
+              >
+                <ExternalLink size={13} />
+                <span>Nova Aba</span>
+              </a>
+
+              {/* Botão claro e visível de retorno ao login no topo (Regra do projeto) */}
+              <button
+                type="button"
+                onClick={onLogout}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 hover:text-white border border-rose-500/30 text-xs font-semibold transition cursor-pointer"
+                title="Voltar ao Login"
+              >
+                <LogOut size={13} />
+                <span className="hidden sm:inline">Sair</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPaginaPDVAberta(false)}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700 transition cursor-pointer"
+                title="Fechar Terminal e Voltar ao Lava Jato (Esc)"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </header>
+
+          {/* CORPO DO TERMINAL PDV COM SCROLL INDEPENDENTE */}
+          <main className="flex-1 overflow-y-auto p-3 sm:p-6 bg-slate-950">
+            <div className="max-w-7xl mx-auto space-y-4">
+              <ModuloPDV
+                produtos={produtos}
+                clientes={clientes}
+                veiculosFila={veiculosFila}
+                vendasHistorico={vendasPDV}
+                unidadeId={unidadeLogada}
+                unidadeNome={nomeLavaJato}
+                onAtualizarEstoque={(produtoId: string, novoEstoque: number) => {
+                  setProdutos(prev => {
+                    const atualizados = prev.map(p => p.id === produtoId ? { ...p, estoque: novoEstoque } : p);
+                    try {
+                      localStorage.setItem('hubwash_produtos', JSON.stringify(atualizados));
+                    } catch {}
+                    return atualizados;
+                  });
+                }}
+                onRegistrarVenda={handleRegistrarVenda}
+                onAdicionarAoCaixa={(valor: number, descricao: string) => {
+                  setMovimentacoesCaixa(prev => [
+                    {
+                      id: `pdv_${Date.now()}`,
+                      descricao,
+                      tipo: 'entrada',
+                      valor,
+                      data: 'Hoje'
+                    },
+                    ...prev
+                  ]);
+                }}
+                onIrParaCadastroProdutos={() => {
+                  setPaginaPDVAberta(false);
+                  setAbaAtiva('produtos');
+                }}
+                temaClasses={temaClasses}
+              />
+            </div>
+          </main>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { LogIn } from 'lucide-react';
 import { buscarUnidadesServidor } from '../services/apiSync';
-import { db, collection, doc, onSnapshot, getDocs } from '../firebase';
+import { db, collection, doc, onSnapshot, getDocs, deleteDoc } from '../firebase';
 
 interface LoginOTPProps {
   onSuccess: (role?: 'master' | 'lavajato' | 'cliente', unidadeNome?: string, telaCliente?: 'login' | 'cadastro' | 'home') => void;
@@ -36,7 +36,13 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
       const salvos = localStorage.getItem('hubwash_lava_jatos');
       if (salvos) {
         const lista = JSON.parse(salvos);
-        if (Array.isArray(lista) && lista.length > 0) return lista;
+        if (Array.isArray(lista) && lista.length > 0) {
+          const limpos = lista.filter((u: any) => u && u.id !== 'alef-jato' && !String(u.nomeFantasia || '').toLowerCase().includes('alef'));
+          try {
+            localStorage.setItem('hubwash_lava_jatos', JSON.stringify(limpos));
+          } catch {}
+          return limpos;
+        }
       }
     } catch {}
     return [
@@ -71,7 +77,12 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
           if (!snap.empty) {
             const doFirestore: any[] = [];
             snap.forEach((docSnap) => {
-              doFirestore.push({ id: docSnap.id, ...docSnap.data() });
+              const dados = docSnap.data();
+              if (docSnap.id === 'alef-jato' || String(dados?.nomeFantasia || '').toLowerCase().includes('alef')) {
+                deleteDoc(doc(db, 'unidades', docSnap.id)).catch(() => {});
+                return;
+              }
+              doFirestore.push({ id: docSnap.id, ...dados });
             });
             if (doFirestore.length > 0) {
               setUnidadesCadastradas(doFirestore);
