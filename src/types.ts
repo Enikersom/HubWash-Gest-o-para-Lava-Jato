@@ -173,6 +173,7 @@ export interface ClienteFidelidade {
   email?: string;
   telefone: string;
   pontos: number;
+  brindeSolicitado?: boolean;
   veiculoPrincipal?: string;
   totalGasto?: number;
   fcmToken?: string;
@@ -204,6 +205,7 @@ export interface AgendamentoPWA {
   email?: string;
   valor?: number | string;
   statusLavagem?: string;
+  isBrindeFidelidade?: boolean;
   levaETraz?: boolean;
   enderecoColeta?: string;
   complementoEndereco?: string;

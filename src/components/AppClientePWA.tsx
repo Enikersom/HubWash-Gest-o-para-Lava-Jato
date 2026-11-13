@@ -76,6 +76,7 @@ export interface Cliente {
   placa: string;
   cor: string;
   pontosFidelidade: number;
+  brindeSolicitado?: boolean;
 }
 
 export interface Agendamento {
@@ -89,6 +90,7 @@ export interface Agendamento {
   veiculo: string;
   servico: string;
   status: string;
+  isBrindeFidelidade?: boolean;
   levaETraz?: boolean;
   enderecoColeta?: string;
   complementoEndereco?: string;
@@ -703,6 +705,12 @@ export default function AppClientePWA({
   const [levaObservacoes, setLevaObservacoes] = useState('');
   const [isEnviandoLevaETraz, setIsEnviandoLevaETraz] = useState(false);
 
+  // MODAL DE SOLICITAÇÃO DE BRINDE (10 PONTOS = LAVAGEM GRÁTIS)
+  const [modalSolicitarBrinde, setModalSolicitarBrinde] = useState(false);
+  const [brindeData, setBrindeData] = useState(hojeString);
+  const [brindeHora, setBrindeHora] = useState('09:00');
+  const [isEnviandoBrinde, setIsEnviandoBrinde] = useState(false);
+
   // OPÇÃO DE LEVA E TRAZ NA ABA AGENDAR
   const [solicitarLevaETrazNaAgenda, setSolicitarLevaETrazNaAgenda] = useState(false);
   const [agendaLevaEndereco, setAgendaLevaEndereco] = useState('');
@@ -857,7 +865,7 @@ export default function AppClientePWA({
           if (Array.isArray(dados.clientes)) {
             const clisFormatados: Cliente[] = dados.clientes.map((c: any) => {
               const emailTratado = (c.email && String(c.email).trim()) || '';
-              const pts = typeof c.pontosFidelidade === 'number' ? c.pontosFidelidade : (typeof c.pontos === 'number' ? c.pontos : 0);
+              const pts = Math.max(0, Math.min(10, typeof c.pontosFidelidade === 'number' ? c.pontosFidelidade : (typeof c.pontos === 'number' ? c.pontos : 0)));
               return {
                 nome: c.nome || 'Cliente',
                 email: emailTratado,
@@ -874,7 +882,8 @@ export default function AppClientePWA({
                 ano: c.ano || '',
                 placa: c.placa || '',
                 cor: c.cor || '',
-                pontosFidelidade: pts
+                pontosFidelidade: pts,
+                brindeSolicitado: Boolean(c.brindeSolicitado)
               };
             });
 
@@ -894,12 +903,23 @@ export default function AppClientePWA({
             // Atualiza pontos do usuário logado se o administrador alterou no escritório
             setUsuarioLogado(atual => {
               if (!atual) return null;
-              const cliAtualizado = clisFormatados.find(
-                c => (c.email && atual.email && String(c.email).toLowerCase() === String(atual.email).toLowerCase()) || 
-                     (atual.contato && c.contato && String(c.contato).replace(/\D/g, '') === String(atual.contato).replace(/\D/g, ''))
+              const correspondentes = clisFormatados.filter(
+                c => (c.email && atual.email && String(c.email).toLowerCase() === String(atual.email).toLowerCase()) ||
+                     (atual.contato && c.contato && String(c.contato).replace(/\D/g, '').length >= 8 && String(c.contato).replace(/\D/g, '') === String(atual.contato).replace(/\D/g, ''))
               );
-              if (cliAtualizado && cliAtualizado.pontosFidelidade !== atual.pontosFidelidade) {
-                return { ...atual, pontosFidelidade: cliAtualizado.pontosFidelidade };
+              if (correspondentes.length === 0) return atual;
+              const cliAtualizado = correspondentes.reduce((best, cur) =>
+                cur.pontosFidelidade >= best.pontosFidelidade ? cur : best
+              );
+              if (
+                cliAtualizado.pontosFidelidade !== atual.pontosFidelidade ||
+                Boolean(cliAtualizado.brindeSolicitado) !== Boolean(atual.brindeSolicitado)
+              ) {
+                return {
+                  ...atual,
+                  pontosFidelidade: cliAtualizado.pontosFidelidade,
+                  brindeSolicitado: Boolean(cliAtualizado.brindeSolicitado)
+                };
               }
               return atual;
             });
@@ -1046,6 +1066,7 @@ export default function AppClientePWA({
                   veiculo: data.veiculo || (data.modelo ? `${data.modelo}${data.placa ? ` (${data.placa})` : ''}` : 'Veículo'),
                   servico: data.servico || 'Lavagem Completa',
                   status: data.status || 'Pendente',
+                  isBrindeFidelidade: Boolean(data.isBrindeFidelidade),
                   levaETraz: Boolean(data.levaETraz),
                   statusLevaETraz: data.statusLevaETraz || (data.levaETraz ? 'Solicitado' : undefined),
                   enderecoColeta: data.enderecoColeta,
@@ -1123,12 +1144,17 @@ export default function AppClientePWA({
                 docUnidade === unidadeIdNormalizada || 
                 docUnidade.includes(unidadeIdNormalizada) || 
                 unidadeIdNormalizada.includes(docUnidade) ||
-                (unidadeAtual && docUnidade.includes(unidadeAtual.id.toLowerCase())) ||
-                (unidadeAtual && docUnidade.includes(unidadeAtual.nomeFantasia.toLowerCase()));
+                unidadesSaoEquivalentes(docUnidade, unidadeIdNormalizada) ||
+                (unidadeAtual && (
+                  docUnidade.includes(unidadeAtual.id.toLowerCase()) ||
+                  docUnidade.includes(unidadeAtual.nomeFantasia.toLowerCase()) ||
+                  unidadesSaoEquivalentes(docUnidade, unidadeAtual.id) ||
+                  unidadesSaoEquivalentes(docUnidade, unidadeAtual.nomeFantasia)
+                ));
 
               if (pertence) {
                 const emailTratado = (data.email && String(data.email).trim()) || (data.nome ? `${String(data.nome).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '')}@email.com` : `cliente_${docSnap.id.slice(0, 5)}@email.com`);
-                const pts = typeof data.pontosFidelidade === 'number' ? data.pontosFidelidade : (typeof data.pontos === 'number' ? data.pontos : 0);
+                const pts = Math.max(0, Math.min(10, typeof data.pontosFidelidade === 'number' ? data.pontosFidelidade : (typeof data.pontos === 'number' ? data.pontos : 0)));
                 
                 const cliObj: Cliente = {
                   nome: data.nome || 'Cliente',
@@ -1146,7 +1172,8 @@ export default function AppClientePWA({
                   ano: data.ano || '',
                   placa: data.placa || '',
                   cor: data.cor || '',
-                  pontosFidelidade: pts
+                  pontosFidelidade: pts,
+                  brindeSolicitado: Boolean(data.brindeSolicitado)
                 };
 
                 clientesFirestore.push(cliObj);
@@ -1169,12 +1196,24 @@ export default function AppClientePWA({
 
               setUsuarioLogado((atual) => {
                 if (!atual) return null;
-                const cliAtualizado = clientesFirestore.find(
-                  (c) => (c.email && atual.email && String(c.email).toLowerCase() === String(atual.email).toLowerCase()) || 
-                         (atual.contato && c.contato && String(c.contato).replace(/\D/g, '') === String(atual.contato).replace(/\D/g, ''))
+                const correspondentes = clientesFirestore.filter(
+                  (c) => (c.email && atual.email && String(c.email).toLowerCase() === String(atual.email).toLowerCase()) ||
+                         (atual.contato && c.contato && String(c.contato).replace(/\D/g, '').length >= 8 && String(c.contato).replace(/\D/g, '') === String(atual.contato).replace(/\D/g, '')) ||
+                         (atual.nome && c.nome && String(c.nome).trim().toLowerCase() === String(atual.nome).trim().toLowerCase())
                 );
-                if (cliAtualizado && cliAtualizado.pontosFidelidade !== atual.pontosFidelidade) {
-                  return { ...atual, pontosFidelidade: cliAtualizado.pontosFidelidade };
+                if (correspondentes.length === 0) return atual;
+                const cliAtualizado = correspondentes.reduce((best, cur) =>
+                  cur.pontosFidelidade >= best.pontosFidelidade ? cur : best
+                );
+                if (
+                  cliAtualizado.pontosFidelidade !== atual.pontosFidelidade ||
+                  Boolean(cliAtualizado.brindeSolicitado) !== Boolean(atual.brindeSolicitado)
+                ) {
+                  return {
+                    ...atual,
+                    pontosFidelidade: cliAtualizado.pontosFidelidade,
+                    brindeSolicitado: Boolean(cliAtualizado.brindeSolicitado)
+                  };
                 }
                 return atual;
               });
@@ -1741,6 +1780,141 @@ export default function AppClientePWA({
       mostrarToast('Erro ao enviar pedido de Leva e Traz. Tente novamente.', 'erro');
     } finally {
       setIsEnviandoLevaETraz(false);
+    }
+  };
+
+  const abrirModalSolicitarBrinde = () => {
+    if (!usuarioLogado) {
+      setTelaAtiva('login');
+      mostrarToast('Faça login para solicitar seu brinde.', 'info');
+      return;
+    }
+    if (usuarioLogado.pontosFidelidade < 10) {
+      mostrarToast(`Você precisa completar 10 selos para solicitar o brinde (atual: ${usuarioLogado.pontosFidelidade}/10).`, 'info');
+      return;
+    }
+    setModalSolicitarBrinde(true);
+  };
+
+  const handleConfirmarSolicitarBrinde = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isEnviandoBrinde || !usuarioLogado) return;
+
+    if (usuarioLogado.pontosFidelidade < 10) {
+      mostrarToast('Você precisa completar 10 pontos para resgatar a lavagem grátis.', 'erro');
+      return;
+    }
+
+    setIsEnviandoBrinde(true);
+
+    try {
+      const veiculoCompleto = usuarioLogado.modelo
+        ? `${usuarioLogado.modelo}${usuarioLogado.placa ? ` (Placa: ${usuarioLogado.placa})` : ''}`
+        : (usuarioLogado.placa ? `Placa: ${usuarioLogado.placa}` : 'Veículo Cadastrado');
+
+      const agendamentoId = `ag_brinde_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const servicoBrinde = '🎁 Lavagem Grátis (Brinde Fidelidade 10/10)';
+
+      const novoAgendamento: Agendamento = {
+        id: agendamentoId,
+        unidadeId: unidadeIdNormalizada,
+        cliente: usuarioLogado.nome || 'Cliente',
+        telefone: usuarioLogado.contato || '(11) 99999-0000',
+        email: usuarioLogado.email || '',
+        data: brindeData || hojeString,
+        horario: brindeHora || '09:00',
+        veiculo: veiculoCompleto,
+        servico: servicoBrinde,
+        status: 'Pendente',
+        isBrindeFidelidade: true
+      };
+
+      setTodosAgendamentos(prev => [novoAgendamento, ...prev.filter(a => a.id !== agendamentoId)]);
+
+      const itemPainel = sanitizarParaFirestore({
+        id: agendamentoId,
+        cliente: usuarioLogado.nome || 'Cliente',
+        telefone: usuarioLogado.contato || '(11) 99999-0000',
+        email: usuarioLogado.email || '',
+        veiculo: veiculoCompleto,
+        servico: servicoBrinde,
+        valor: 0,
+        data: brindeData || hojeString,
+        horario: brindeHora || '09:00',
+        status: 'Pendente',
+        isBrindeFidelidade: true,
+        unidadeId: unidadeIdNormalizada,
+        unidadeVinculadaId: unidadeIdNormalizada,
+        unidadeNome: unidadeAtual.nomeFantasia,
+        unidadeSlug: unidadeAtual.id,
+        levaETraz: false,
+        createdAt: new Date().toISOString()
+      });
+
+      let salvoServidor = false;
+      try {
+        const resSrv = await salvarAgendamentoServidor(itemPainel as any);
+        salvoServidor = Boolean(resSrv);
+      } catch {}
+
+      try {
+        const chavesPainel = [
+          'hubwash_agendamentos_painel',
+          `hubwash_agendamentos_painel_${unidadeIdNormalizada}`,
+          `hubwash_agendamentos_${unidadeIdNormalizada}`
+        ];
+        chavesPainel.forEach(chave => {
+          try {
+            const salvosPainel = localStorage.getItem(chave);
+            const listaPainel = salvosPainel ? JSON.parse(salvosPainel) : [];
+            const listaFinal = [itemPainel, ...(Array.isArray(listaPainel) ? listaPainel : []).filter((a: any) => a.id !== agendamentoId)];
+            localStorage.setItem(chave, JSON.stringify(listaFinal));
+          } catch {}
+        });
+        window.dispatchEvent(new CustomEvent('hubwash_agendamento_criado', { detail: itemPainel }));
+        window.dispatchEvent(new CustomEvent('hubwash_agendamento_alterado', { detail: itemPainel }));
+      } catch {}
+
+      let salvoFirestore = false;
+      if (db) {
+        try {
+          await setDoc(doc(db, 'agendamentos', agendamentoId), itemPainel);
+          salvoFirestore = true;
+        } catch (err) {
+          console.error('Erro ao salvar solicitação de brinde no Firestore:', err);
+          try {
+            await addDoc(collection(db, 'agendamentos'), itemPainel);
+            salvoFirestore = true;
+          } catch {}
+        }
+
+        if (usuarioLogado.email) {
+          try {
+            const snapCli = await getDocs(query(collection(db, 'clientes'), where('email', '==', usuarioLogado.email)));
+            snapCli.forEach((docSnap: any) => {
+              setDoc(docSnap.ref, {
+                brindeSolicitado: true,
+                brindeSolicitadoEm: new Date().toISOString()
+              }, { merge: true }).catch(() => {});
+            });
+          } catch {}
+        }
+      }
+
+      setUsuarioLogado(prev => prev ? { ...prev, brindeSolicitado: true } : prev);
+      setModalSolicitarBrinde(false);
+      setTelaAtiva('home');
+
+      if (!salvoServidor && !salvoFirestore) {
+        mostrarToast('⚠️ Solicitação de brinde salva no aparelho, mas sem conexão com a nuvem do lava-jato.', 'info');
+      } else {
+        mostrarToast('🎁 Brinde solicitado com sucesso! Sua lavagem grátis foi enviada para o lava-jato.', 'sucesso');
+      }
+    } catch (err) {
+      console.error('Erro ao solicitar brinde:', err);
+      mostrarToast('Erro ao solicitar seu brinde. Tente novamente.', 'erro');
+    } finally {
+      setIsEnviandoBrinde(false);
     }
   };
 
@@ -2316,6 +2490,94 @@ export default function AppClientePWA({
                     <>
                       <Check size={14} />
                       <span>Confirmar Coleta</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE SOLICITAÇÃO DE BRINDE (10 PONTOS = LAVAGEM GRÁTIS) */}
+      {modalSolicitarBrinde && usuarioLogado && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="w-full max-w-sm bg-slate-900 border border-amber-500/40 rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xl relative my-auto">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center shrink-0">
+                  <Gift size={20} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white leading-tight">Solicitar Brinde</h3>
+                  <p className="text-[11px] text-emerald-400 font-semibold">Parabéns você ganhou uma lavagem grátis</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalSolicitarBrinde(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                title="Fechar"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmarSolicitarBrinde} className="space-y-3 text-xs font-semibold">
+              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-1">
+                <p className="text-emerald-300 font-bold flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-amber-400" />
+                  <span>10/10 Selos Completos — Cortesia 100% Grátis</span>
+                </p>
+                <p className="text-[11px] text-slate-300 font-normal">
+                  Escolha o melhor dia e horário para levar seu veículo ({usuarioLogado.modelo || 'Veículo Cadastrado'}) ao {unidadeAtual.nomeFantasia}.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-slate-400">Data desejada</label>
+                  <input
+                    type="date"
+                    min={hojeString}
+                    value={brindeData}
+                    onChange={(e) => setBrindeData(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white focus:outline-none focus:border-amber-500 text-xs cursor-pointer"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-slate-400">Horário</label>
+                  <input
+                    type="time"
+                    value={brindeHora}
+                    onChange={(e) => setBrindeHora(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white focus:outline-none focus:border-amber-500 text-xs cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setModalSolicitarBrinde(false)}
+                  className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isEnviandoBrinde}
+                  className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-emerald-500 hover:from-amber-400 hover:to-emerald-400 text-slate-950 text-xs font-black shadow-lg shadow-amber-500/20 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isEnviandoBrinde ? (
+                    <>
+                      <RefreshCw size={13} className="animate-spin" />
+                      <span>Enviando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Gift size={14} />
+                      <span>Solicitar Brinde</span>
                     </>
                   )}
                 </button>
@@ -3306,7 +3568,11 @@ export default function AppClientePWA({
               {/* Cartão de Fidelidade Resumo */}
               <div
                 onClick={() => setTelaAtiva('fidelidade')}
-                className="bg-slate-950/90 border border-slate-800 hover:border-amber-500/40 rounded-2xl p-4 shadow-lg cursor-pointer transition space-y-2.5 group"
+                className={`bg-slate-950/90 border rounded-2xl p-4 shadow-lg cursor-pointer transition space-y-2.5 group ${
+                  usuarioLogado.pontosFidelidade >= 10
+                    ? 'border-amber-500/50 bg-gradient-to-br from-slate-950 to-amber-950/20'
+                    : 'border-slate-800 hover:border-amber-500/40'
+                }`}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -3316,25 +3582,46 @@ export default function AppClientePWA({
                     <span className="text-xs font-bold text-white">Cartão Fidelidade ({unidadeAtual.nomeFantasia})</span>
                   </div>
                   <span className="text-xs font-extrabold text-amber-400">
-                    {usuarioLogado.pontosFidelidade}/10 Selos
+                    {Math.min(10, usuarioLogado.pontosFidelidade)}/10 Selos
                   </span>
                 </div>
 
                 <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
                   <div
                     className="bg-gradient-to-r from-amber-500 to-yellow-400 h-full rounded-full transition-all duration-500"
-                    style={{ width: `${(usuarioLogado.pontosFidelidade / 10) * 100}%` }}
+                    style={{ width: `${Math.min(100, (usuarioLogado.pontosFidelidade / 10) * 100)}%` }}
                   />
                 </div>
 
-                <p className="text-[10px] text-slate-400 flex items-center justify-between">
-                  <span>
-                    {usuarioLogado.pontosFidelidade >= 10
-                      ? '🎉 Você já tem direito a 1 Lavagem Grátis!'
-                      : `Faltam ${10 - usuarioLogado.pontosFidelidade} lavagens para sua cortesia.`}
-                  </span>
-                  <span className="text-amber-400 font-semibold group-hover:translate-x-1 transition-transform">Ver Selos →</span>
-                </p>
+                {usuarioLogado.pontosFidelidade >= 10 ? (
+                  <div className="space-y-2.5 pt-1">
+                    <p className="text-xs font-extrabold text-emerald-400 flex items-center gap-1.5">
+                      <Gift size={14} className="text-amber-400 shrink-0" />
+                      <span>Parabéns você ganhou uma lavagem grátis</span>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        abrirModalSolicitarBrinde();
+                      }}
+                      className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-emerald-500 hover:from-amber-400 hover:to-emerald-400 text-slate-950 font-black text-xs transition shadow-lg shadow-amber-500/20 flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Gift size={14} />
+                      <span>Solicitar Brinde</span>
+                    </button>
+                    {usuarioLogado.brindeSolicitado && (
+                      <p className="text-[10px] text-emerald-300/90 text-center font-semibold">
+                        ✓ Solicitação de brinde registrada! Aguardando atendimento no lava-jato.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-400 flex items-center justify-between">
+                    <span>Faltam {10 - usuarioLogado.pontosFidelidade} lavagens para sua cortesia.</span>
+                    <span className="text-amber-400 font-semibold group-hover:translate-x-1 transition-transform">Ver Selos →</span>
+                  </p>
+                )}
               </div>
 
               {/* Lista de Serviços e Preços Disponíveis no Lava Jato */}
@@ -3792,13 +4079,43 @@ export default function AppClientePWA({
                   })}
                 </div>
 
-                <div className="space-y-1">
-                  <p className="text-xs font-bold text-white">
-                    {usuarioLogado.pontosFidelidade} de 10 Lavagens Realizadas
-                  </p>
-                  <p className="text-[11px] text-slate-400">
-                    A cada lavagem concluída no {unidadeAtual.nomeFantasia} você ganha 1 selo. Ao completar 10 selos, sua próxima ducha é grátis!
-                  </p>
+                <div className="space-y-3">
+                  {usuarioLogado.pontosFidelidade >= 10 ? (
+                    <>
+                      <div className="p-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 space-y-1">
+                        <p className="text-sm font-black text-emerald-300">
+                          Parabéns você ganhou uma lavagem grátis
+                        </p>
+                        <p className="text-[11px] text-slate-300">
+                          Você completou os 10 selos no {unidadeAtual.nomeFantasia}! Clique abaixo para solicitar seu brinde.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={abrirModalSolicitarBrinde}
+                        className="w-full py-3 px-4 rounded-2xl bg-gradient-to-r from-amber-500 to-emerald-500 hover:from-amber-400 hover:to-emerald-400 text-slate-950 font-black text-xs transition shadow-xl shadow-amber-500/25 flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <Gift size={16} />
+                        <span>Solicitar Brinde</span>
+                      </button>
+
+                      {usuarioLogado.brindeSolicitado && (
+                        <p className="text-[11px] text-emerald-300 font-semibold">
+                          ✓ Brinde já solicitado! Acompanhe na aba Início ou apresente no balcão.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs font-bold text-white">
+                        {usuarioLogado.pontosFidelidade} de 10 Lavagens Realizadas
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        A cada lavagem concluída no {unidadeAtual.nomeFantasia} você ganha 1 selo. Ao completar 10 selos, sua próxima ducha é grátis!
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
             </div>

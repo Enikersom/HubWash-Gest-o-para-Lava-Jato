@@ -21,6 +21,7 @@
         "placa": { "type": "string", "maxLength": 20 },
         "cor": { "type": "string", "maxLength": 50 },
         "pontosFidelidade": { "type": "number" },
+        "brindeSolicitado": { "type": "boolean" },
         "createdAt": { "type": "string" }
       },
       "required": ["nome", "email", "unidadeVinculadaId", "modelo", "placa"]
@@ -45,6 +46,7 @@
         "data": { "type": "string", "maxLength": 30 },
         "horario": { "type": "string", "maxLength": 20 },
         "status": { "type": "string", "maxLength": 50 },
+        "isBrindeFidelidade": { "type": "boolean" },
         "levaETraz": { "type": "boolean" },
         "statusLevaETraz": { "type": "string", "maxLength": 50 },
         "enderecoColeta": { "type": "string", "maxLength": 300 },

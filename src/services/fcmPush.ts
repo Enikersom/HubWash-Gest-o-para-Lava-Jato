@@ -5,14 +5,14 @@
 
 import { getMessaging, getToken, onMessage } from 'firebase/messaging';
 import { doc, setDoc } from 'firebase/firestore';
-import { app, db } from '../firebase';
+import { app, auth, db } from '../firebase';
 import { FCM_VAPID_KEY } from '../constants';
 
 /**
  * Solicita permissão ao usuário para enviar notificações push,
  * gera o token FCM Web Push e salva no Cloud Firestore.
  * 
- * @param clienteId ID único do cliente (ex: e-mail, telefone ou ID do Firestore)
+ * @param clienteId ID único do cliente (preferencialmente auth.currentUser.uid)
  * @param vapidKey Chave VAPID pública gerada no Console do Firebase (opcional, utiliza a chave cadastrada por padrão)
  * @param unidadeId ID da unidade/empresa do lava-jato
  */
@@ -56,21 +56,26 @@ export async function solicitarPermissaoPushFCM(
       return { sucesso: false, erro: 'Não foi possível gerar o token FCM deste dispositivo.' };
     }
 
-    // 6. Salva o token FCM no Cloud Firestore vinculado ao cliente e unidade
-    if (db && clienteId) {
-      const clienteDocRef = doc(db, 'clientes', clienteId);
-      await setDoc(clienteDocRef, {
-        fcmToken: fcmToken,
-        fcmTokenAtualizadoEm: new Date().toISOString(),
-        unidadeVinculadaId: unidadeId || 'pitstop',
-        notificacoesAtivas: true
-      }, { merge: true });
+    // 6. Salva o token FCM no Cloud Firestore vinculado ao cliente autenticado e unidade
+    const uidAutenticado = auth.currentUser?.uid || clienteId;
+    if (db && uidAutenticado) {
+      if (auth.currentUser?.uid) {
+        const clienteDocRef = doc(db, 'clientes', auth.currentUser.uid);
+        await setDoc(clienteDocRef, {
+          ownerUid: auth.currentUser.uid,
+          fcmToken: fcmToken,
+          fcmTokenAtualizadoEm: new Date().toISOString(),
+          unidadeVinculadaId: unidadeId || 'pitstop',
+          notificacoesAtivas: true
+        }, { merge: true });
+      }
 
-      // Também pode salvar em uma coleção dedicada 'dispositivos_fcm'
+      // Salva na coleção dedicada 'dispositivos_fcm' com vínculo seguro ao UID
       const dispositivoRef = doc(db, 'dispositivos_fcm', fcmToken);
       await setDoc(dispositivoRef, {
         token: fcmToken,
-        clienteId: clienteId,
+        ownerUid: uidAutenticado,
+        clienteId: clienteId || uidAutenticado,
         unidadeId: unidadeId || 'pitstop',
         atualizadoEm: new Date().toISOString()
       }, { merge: true });

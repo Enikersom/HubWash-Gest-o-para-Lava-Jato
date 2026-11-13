@@ -1,9 +1,23 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updateProfile,
+  onAuthStateChanged,
+  signOut,
+  type User as FirebaseUser
+} from 'firebase/auth';
+import {
   getFirestore,
   collection,
   addDoc,
   doc,
+  getDoc,
+  getDocFromServer,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -11,13 +25,19 @@ import {
   query,
   where,
   orderBy,
-  getDocs,
-  Firestore
+  limit,
+  getDocs
 } from 'firebase/firestore';
 import appletConfig from '../firebase-applet-config.json';
 
+export const SUPER_ADMIN_EMAIL = 'enikersom2020@gmail.com';
+
+export function isEmailSuperAdmin(email?: string | null): boolean {
+  return Boolean(email && email.trim().toLowerCase() === SUPER_ADMIN_EMAIL);
+}
+
 // ============================================================================
-// CONFIGURAÇÃO DO FIREBASE FIRESTORE (BANCO OFICIAL GOOGLE CLOUD)
+// CONFIGURAÇÃO DO FIREBASE FIRESTORE & AUTH (GOOGLE CLOUD)
 // ============================================================================
 function carregarConfigFirebase() {
   // 1. Prioridade Máxima: Configuração provisionada automaticamente pelo AI Studio
@@ -51,7 +71,7 @@ function carregarConfigFirebase() {
     return { config: envConfig, fonte: 'env' as const };
   }
 
-  // 2. Tenta carregar do localStorage (Configuração salva pelo usuário no painel)
+  // 3. Tenta carregar do localStorage (Configuração salva pelo usuário no painel)
   try {
     if (typeof window !== 'undefined') {
       const salvo = localStorage.getItem('hubwash_firebase_config');
@@ -66,7 +86,7 @@ function carregarConfigFirebase() {
     console.warn('Erro ao ler hubwash_firebase_config:', e);
   }
 
-  // 3. Configuração oficial do projeto hubwash-pro
+  // 4. Configuração oficial do projeto hubwash-pro
   return {
     config: {
       apiKey: "AIzaSyDyAQAQ3m-fdTLMce9lIc40_2soI3Ro0yA",
@@ -83,19 +103,93 @@ function carregarConfigFirebase() {
 
 const { config: firebaseConfig, fonte: configFonte } = carregarConfigFirebase();
 
-// Inicialização segura do Firebase
-let app = getApps().length > 0
+// Inicialização segura do Firebase App, Auth e Firestore
+const app = getApps().length > 0
   ? getApp()
   : initializeApp(firebaseConfig);
 
-// ➡️ Banco de Dados Cloud Firestore (suporta banco padrão ou banco nomeado como 'bancodb')
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
+
 const db = firebaseConfig.databaseId && firebaseConfig.databaseId !== '(default)'
   ? getFirestore(app, firebaseConfig.databaseId)
   : getFirestore(app);
 
-export function getFirebaseStatus(): { 
-  configurado: boolean; 
-  projectId: string; 
+// ============================================================================
+// TRATAMENTO PADRONIZADO DE ERROS DE PERMISSÃO FIRESTORE
+// ============================================================================
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null,
+  rethrow = false
+): FirestoreErrorInfo {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map((provider) => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.warn('Firestore Error:', JSON.stringify(errInfo));
+  if (rethrow) {
+    throw new Error(JSON.stringify(errInfo));
+  }
+  return errInfo;
+}
+
+// Teste inicial de conectividade com o Firestore conforme padrão da skill Firebase
+async function testConnection() {
+  if (typeof window === 'undefined') return;
+  try {
+    await getDocFromServer(doc(db, 'teste_conexao', 'ping'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+testConnection();
+
+export function getFirebaseStatus(): {
+  configurado: boolean;
+  projectId: string;
   fonte: 'applet' | 'env' | 'local' | 'demo';
   modoReal: boolean;
   databaseId?: string;
@@ -140,10 +234,22 @@ export function limparFirebaseConfig() {
 
 export {
   app,
+  auth,
+  googleProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updateProfile,
+  onAuthStateChanged,
+  signOut,
+  type FirebaseUser,
   db,
   collection,
   addDoc,
   doc,
+  getDoc,
+  getDocFromServer,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -151,6 +257,7 @@ export {
   query,
   where,
   orderBy,
+  limit,
   getDocs,
   firebaseConfig
 };

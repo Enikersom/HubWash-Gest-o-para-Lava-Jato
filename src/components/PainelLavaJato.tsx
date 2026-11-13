@@ -1212,7 +1212,8 @@ export default function PainelLavaJato({
                   email: data.email || '',
                   telefone: data.contato || data.telefone || '(11) 99999-0000',
                   veiculoPrincipal: veiculoFormatado,
-                  pontos: typeof data.pontosFidelidade === 'number' ? data.pontosFidelidade : (typeof data.pontos === 'number' ? data.pontos : 0),
+                  pontos: Math.max(0, Math.min(10, typeof data.pontosFidelidade === 'number' ? data.pontosFidelidade : (typeof data.pontos === 'number' ? data.pontos : 0))),
+                  brindeSolicitado: Boolean(data.brindeSolicitado),
                   totalGasto: data.totalGasto || 0
                 });
               }
@@ -1261,6 +1262,7 @@ export default function PainelLavaJato({
                   status: (data.status as any) || 'Pendente',
                   unidadeId: data.unidadeId || unidadeSlugSanitizada,
                   unidadeVinculadaId: data.unidadeVinculadaId || unidadeSlugSanitizada,
+                  isBrindeFidelidade: Boolean(data.isBrindeFidelidade),
                   levaETraz: Boolean(data.levaETraz),
                   statusLevaETraz: data.statusLevaETraz || (data.levaETraz ? 'Solicitado' : undefined),
                   enderecoColeta: data.enderecoColeta,
@@ -1974,31 +1976,87 @@ export default function PainelLavaJato({
     mostrarToast(`Veículo ${novoItem.veiculo} adicionado na fila com status "Espera"!`, 'sucesso');
   };
 
+  const sincronizarPontosLocalECloud = async (
+    clienteAlvo: ClienteFidelidade,
+    novosPontos: number,
+    brindeFlag?: boolean
+  ) => {
+    const patchDados: Record<string, any> = {
+      pontosFidelidade: novosPontos,
+      pontos: novosPontos,
+      updatedAt: new Date().toISOString()
+    };
+    if (typeof brindeFlag === 'boolean') {
+      patchDados.brindeSolicitado = brindeFlag;
+    } else if (novosPontos < 10) {
+      patchDados.brindeSolicitado = false;
+    }
+
+    setClientes((prev) => {
+      const atualizados = prev.map((c) =>
+        c.id === clienteAlvo.id
+          ? {
+              ...c,
+              pontos: novosPontos,
+              ...(typeof patchDados.brindeSolicitado === 'boolean' ? { brindeSolicitado: patchDados.brindeSolicitado } : {})
+            }
+          : c
+      );
+      try {
+        localStorage.setItem(`hubwash_clientes_fidelidade_${unidadeSlugSanitizada}`, JSON.stringify(atualizados));
+        if (isPitStop) {
+          localStorage.setItem('hubwash_clientes_fidelidade', JSON.stringify(atualizados));
+        }
+      } catch {}
+      return atualizados;
+    });
+
+    try {
+      await atualizarPontosClienteServidor(clienteAlvo.id, novosPontos);
+      if (clienteAlvo.email) {
+        await atualizarPontosClienteServidor(clienteAlvo.email, novosPontos);
+      }
+    } catch {}
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'clientes', clienteAlvo.id), sanitizarParaFirestore(patchDados), { merge: true });
+      } catch (err) {
+        console.warn('Erro ao atualizar pontos por ID no Firestore:', err);
+      }
+
+      if (clienteAlvo.email) {
+        try {
+          const snapEmail = await getDocs(query(collection(db, 'clientes'), where('email', '==', clienteAlvo.email)));
+          snapEmail.forEach((docSnap: any) => {
+            if (docSnap.id !== clienteAlvo.id && matchUnidade(docSnap.data())) {
+              setDoc(docSnap.ref, sanitizarParaFirestore(patchDados), { merge: true }).catch(() => {});
+            }
+          });
+        } catch {}
+      }
+    }
+  };
+
   // Pontos de Fidelidade (Exclusivo do Administrador)
   const adicionarPontoCliente = async (id: string) => {
     const clienteAlvo = clientes.find(c => c.id === id);
     if (!clienteAlvo) return;
-    const novosPontos = clienteAlvo.pontos + 1 >= 10 ? 0 : clienteAlvo.pontos + 1;
 
-    setClientes(clientes.map(c => c.id === id ? { ...c, pontos: novosPontos } : c));
+    if (clienteAlvo.pontos >= 10) {
+      mostrarToast(`🎉 ${clienteAlvo.nome} já completou 10/10 pontos! Clique em "Zerar" após entregar a lavagem grátis.`, 'info');
+      return;
+    }
 
-    if (novosPontos === 0) {
-      mostrarToast(`🎉 PARABÉNS! ${clienteAlvo.nome} atingiu 10 pontos e ganhou UMA LAVAGEM GRÁTIS!`, 'sucesso');
+    const novosPontos = Math.min(10, clienteAlvo.pontos + 1);
+
+    if (novosPontos >= 10) {
+      mostrarToast(`🎉 Parabéns! ${clienteAlvo.nome} atingiu 10 pontos e ganhou uma lavagem grátis!`, 'sucesso');
     } else {
       mostrarToast(`+1 Ponto adicionado para ${clienteAlvo.nome}. Total: ${novosPontos}/10`, 'sucesso');
     }
 
-    try {
-      await atualizarPontosClienteServidor(id, novosPontos);
-      if (db && !id.startsWith('17') && isNaN(Number(id))) {
-        await updateDoc(doc(db, 'clientes', id), {
-          pontosFidelidade: novosPontos,
-          pontos: novosPontos
-        });
-      }
-    } catch (err) {
-      console.warn('Erro ao atualizar pontos:', err);
-    }
+    await sincronizarPontosLocalECloud(clienteAlvo, novosPontos);
   };
 
   const removerPontoCliente = async (id: string) => {
@@ -2006,49 +2064,27 @@ export default function PainelLavaJato({
     if (!clienteAlvo) return;
     const novosPontos = Math.max(0, clienteAlvo.pontos - 1);
 
-    setClientes(clientes.map(c => c.id === id ? { ...c, pontos: novosPontos } : c));
     mostrarToast(`Ponto ajustado para ${clienteAlvo.nome}. Total: ${novosPontos}/10`, 'info');
-
-    try {
-      await atualizarPontosClienteServidor(id, novosPontos);
-      if (db && !id.startsWith('17') && isNaN(Number(id))) {
-        await updateDoc(doc(db, 'clientes', id), {
-          pontosFidelidade: novosPontos,
-          pontos: novosPontos
-        });
-      }
-    } catch (err) {
-      console.warn('Erro ao atualizar pontos:', err);
-    }
+    await sincronizarPontosLocalECloud(clienteAlvo, novosPontos, novosPontos < 10 ? false : undefined);
   };
 
   const zerarPontosCliente = async (id: string) => {
     const clienteAlvo = clientes.find(c => c.id === id);
     if (!clienteAlvo) return;
 
-    setClientes(clientes.map(c => c.id === id ? { ...c, pontos: 0 } : c));
-    mostrarToast(`Pontos de ${clienteAlvo.nome} zerados / resgatados!`, 'info');
-
-    try {
-      await atualizarPontosClienteServidor(id, 0);
-      if (db && !id.startsWith('17') && isNaN(Number(id))) {
-        await updateDoc(doc(db, 'clientes', id), {
-          pontosFidelidade: 0,
-          pontos: 0
-        });
-      }
-    } catch (err) {
-      console.warn('Erro ao zerar pontos:', err);
-    }
+    mostrarToast(`Pontos de ${clienteAlvo.nome} zerados / lavagem grátis resgatada!`, 'info');
+    await sincronizarPontosLocalECloud(clienteAlvo, 0, false);
   };
 
   // Pontuar cliente diretamente pelo agendamento recebido
   const handlePontuarAgendamento = async (ag: AgendamentoPWA) => {
     const termoNome = String(ag.cliente || '').trim().toLowerCase();
     const termoTel = String(ag.telefone || '').replace(/\D/g, '');
+    const termoEmail = String(ag.email || '').trim().toLowerCase();
 
     const clienteExistente = clientes.find(
       (c) =>
+        (termoEmail && String(c.email || '').trim().toLowerCase() === termoEmail) ||
         String(c.nome || '').trim().toLowerCase() === termoNome ||
         (termoTel.length >= 8 && String(c.telefone || '').replace(/\D/g, '').includes(termoTel))
     );
@@ -2056,7 +2092,7 @@ export default function PainelLavaJato({
     if (clienteExistente) {
       await adicionarPontoCliente(clienteExistente.id);
     } else {
-      const emailGerado = `${ag.cliente.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '')}@email.com`;
+      const emailGerado = ag.email?.trim() || `${ag.cliente.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '')}@email.com`;
       const tempId = `cli_${Date.now()}`;
       const novoCli: ClienteFidelidade = {
         id: tempId,
@@ -2068,46 +2104,41 @@ export default function PainelLavaJato({
         totalGasto: 0
       };
 
-      setClientes([novoCli, ...clientes]);
+      setClientes((prev) => {
+        const atualizados = [novoCli, ...prev];
+        try {
+          localStorage.setItem(`hubwash_clientes_fidelidade_${unidadeSlugSanitizada}`, JSON.stringify(atualizados));
+          if (isPitStop) {
+            localStorage.setItem('hubwash_clientes_fidelidade', JSON.stringify(atualizados));
+          }
+        } catch {}
+        return atualizados;
+      });
+
+      const payloadNovo = sanitizarParaFirestore({
+        id: tempId,
+        nome: novoCli.nome,
+        email: emailGerado,
+        senhaAcesso: '123456',
+        contato: novoCli.telefone,
+        telefone: novoCli.telefone,
+        modelo: novoCli.veiculoPrincipal,
+        veiculoPrincipal: novoCli.veiculoPrincipal,
+        placa: '',
+        unidadeVinculadaId: unidadeLogada,
+        unidadeId: unidadeLogada,
+        unidadeNome: unidadeNome,
+        unidadeSlug: unidadeLogada,
+        pontosFidelidade: 1,
+        pontos: 1,
+        brindeSolicitado: false,
+        createdAt: new Date().toISOString()
+      });
 
       try {
-        await registrarClienteServidor({
-          id: tempId,
-          nome: novoCli.nome,
-          email: emailGerado,
-          senhaAcesso: '123456',
-          contato: novoCli.telefone,
-          telefone: novoCli.telefone,
-          modelo: novoCli.veiculoPrincipal,
-          veiculoPrincipal: novoCli.veiculoPrincipal,
-          placa: '',
-          unidadeVinculadaId: unidadeLogada,
-          unidadeId: unidadeLogada,
-          unidadeNome: unidadeNome,
-          unidadeSlug: unidadeLogada,
-          pontosFidelidade: 1,
-          pontos: 1,
-          createdAt: new Date().toISOString()
-        });
-
+        await registrarClienteServidor(payloadNovo as any);
         if (db) {
-          await addDoc(collection(db, 'clientes'), {
-            nome: novoCli.nome,
-            email: emailGerado,
-            senhaAcesso: '123456',
-            contato: novoCli.telefone,
-            telefone: novoCli.telefone,
-            modelo: novoCli.veiculoPrincipal,
-            veiculoPrincipal: novoCli.veiculoPrincipal,
-            placa: '',
-            unidadeVinculadaId: unidadeLogada,
-            unidadeId: unidadeLogada,
-            unidadeNome: unidadeNome,
-            unidadeSlug: unidadeLogada,
-            pontosFidelidade: 1,
-            pontos: 1,
-            createdAt: new Date().toISOString()
-          });
+          await setDoc(doc(db, 'clientes', tempId), payloadNovo, { merge: true });
         }
       } catch (e) {
         console.warn('Erro ao gravar cliente pontuado:', e);
@@ -2214,50 +2245,46 @@ export default function PainelLavaJato({
       totalGasto: 0
     };
 
-    setClientes([novoCli, ...clientes]);
+    setClientes((prev) => {
+      const atualizados = [novoCli, ...prev];
+      try {
+        localStorage.setItem(`hubwash_clientes_fidelidade_${unidadeSlugSanitizada}`, JSON.stringify(atualizados));
+        if (isPitStop) {
+          localStorage.setItem('hubwash_clientes_fidelidade', JSON.stringify(atualizados));
+        }
+      } catch {}
+      return atualizados;
+    });
     setNovoCliNome('');
     setNovoCliEmail('');
     setNovoCliTel('');
     setNovoCliVeiculo('');
 
+    const payloadCliente = sanitizarParaFirestore({
+      id: tempId,
+      nome: novoCli.nome,
+      email: emailLimpo,
+      senhaAcesso: '123456',
+      contato: novoCli.telefone,
+      telefone: novoCli.telefone,
+      modelo: novoCli.veiculoPrincipal,
+      veiculoPrincipal: novoCli.veiculoPrincipal,
+      placa: '',
+      unidadeVinculadaId: unidadeLogada,
+      unidadeId: unidadeLogada,
+      unidadeNome: unidadeNome,
+      unidadeSlug: unidadeLogada,
+      pontosFidelidade: 0,
+      pontos: 0,
+      brindeSolicitado: false,
+      createdAt: new Date().toISOString()
+    });
+
     try {
-      await registrarClienteServidor({
-        id: tempId,
-        nome: novoCli.nome,
-        email: emailLimpo,
-        senhaAcesso: '123456',
-        contato: novoCli.telefone,
-        telefone: novoCli.telefone,
-        modelo: novoCli.veiculoPrincipal,
-        veiculoPrincipal: novoCli.veiculoPrincipal,
-        placa: '',
-        unidadeVinculadaId: unidadeLogada,
-        unidadeId: unidadeLogada,
-        unidadeNome: unidadeNome,
-        unidadeSlug: unidadeLogada,
-        pontosFidelidade: 0,
-        pontos: 0,
-        createdAt: new Date().toISOString()
-      });
+      await registrarClienteServidor(payloadCliente as any);
 
       if (db) {
-        await addDoc(collection(db, 'clientes'), {
-          nome: novoCli.nome,
-          email: emailLimpo,
-          senhaAcesso: '123456',
-          contato: novoCli.telefone,
-          telefone: novoCli.telefone,
-          modelo: novoCli.veiculoPrincipal,
-          veiculoPrincipal: novoCli.veiculoPrincipal,
-          placa: '',
-          unidadeVinculadaId: unidadeLogada,
-          unidadeId: unidadeLogada,
-          unidadeNome: unidadeNome,
-          unidadeSlug: unidadeLogada,
-          pontosFidelidade: 0,
-          pontos: 0,
-          createdAt: new Date().toISOString()
-        });
+        await setDoc(doc(db, 'clientes', tempId), payloadCliente, { merge: true });
       }
     } catch (err) {
       console.warn('Cliente salvo localmente:', err);
@@ -3804,6 +3831,13 @@ export default function PainelLavaJato({
                                 <span>LEVA E TRAZ</span>
                               </span>
                             )}
+
+                            {(ag.isBrindeFidelidade || String(ag.servico || '').toLowerCase().includes('brinde fidelidade')) && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 flex items-center gap-1">
+                                <Gift size={10} />
+                                <span>BRINDE FIDELIDADE (GRÁTIS)</span>
+                              </span>
+                            )}
                           </div>
 
                           <span className="text-[11px] font-mono text-cyan-400 font-bold bg-slate-950 px-2 py-0.5 rounded-lg border border-slate-800">
@@ -4575,12 +4609,16 @@ export default function PainelLavaJato({
                   {clientes
                     .filter(c => String(c?.nome || '').toLowerCase().includes(buscaCliente.toLowerCase()))
                     .map((c) => {
-                      const progresso = (c.pontos / 10) * 100;
+                      const pontosAtuais = Math.max(0, Math.min(10, c.pontos || 0));
+                      const progresso = (pontosAtuais / 10) * 100;
+                      const atingiuBrinde = pontosAtuais >= 10;
 
                       return (
                         <div
                           key={c.id}
-                          className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4.5 space-y-3 shadow-lg"
+                          className={`bg-slate-900/80 border rounded-2xl p-4.5 space-y-3 shadow-lg ${
+                            atingiuBrinde ? 'border-amber-500/50' : 'border-slate-800'
+                          }`}
                         >
                           <div className="flex items-start justify-between border-b border-slate-800 pb-2.5">
                             <div>
@@ -4603,7 +4641,9 @@ export default function PainelLavaJato({
                           <div className="space-y-1.5">
                             <div className="flex items-center justify-between text-xs">
                               <span className="text-slate-400 font-medium">Pontos Acumulados</span>
-                              <span className="font-bold text-amber-400">{c.pontos} / 10 pontos</span>
+                              <span className={`font-bold ${atingiuBrinde ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                {pontosAtuais} / 10 pontos
+                              </span>
                             </div>
 
                             <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden border border-slate-800">
@@ -4612,6 +4652,17 @@ export default function PainelLavaJato({
                                 style={{ width: `${progresso}%` }}
                               />
                             </div>
+
+                            {atingiuBrinde && (
+                              <div className="mt-1.5 p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-bold text-emerald-300 flex items-center gap-1.5">
+                                <Gift size={13} className="shrink-0 text-amber-400" />
+                                <span>
+                                  {c.brindeSolicitado
+                                    ? 'Brinde solicitado pelo cliente! (Lavagem Grátis)'
+                                    : 'Parabéns você ganhou uma lavagem grátis (10/10)'}
+                                </span>
+                              </div>
+                            )}
                           </div>
 
                           {/* Botões de Gestão de Pontos pelo Administrador */}
@@ -4619,7 +4670,7 @@ export default function PainelLavaJato({
                             <button
                               type="button"
                               onClick={() => removerPontoCliente(c.id)}
-                              disabled={c.pontos <= 0}
+                              disabled={pontosAtuais <= 0}
                               className="py-2 px-2 bg-slate-800/80 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 border border-slate-700 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 cursor-pointer"
                               title="Remover 1 ponto"
                             >
@@ -4630,11 +4681,12 @@ export default function PainelLavaJato({
                             <button
                               type="button"
                               onClick={() => adicionarPontoCliente(c.id)}
-                              className="py-2 px-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-white border border-amber-500/40 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 cursor-pointer shadow-sm"
-                              title="Adicionar 1 ponto de fidelidade"
+                              disabled={atingiuBrinde}
+                              className="py-2 px-2 bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-amber-300 hover:text-white border border-amber-500/40 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 cursor-pointer shadow-sm"
+                              title={atingiuBrinde ? 'Cliente atingiu o máximo de 10 pontos' : 'Adicionar 1 ponto de fidelidade'}
                             >
                               <Sparkles size={13} className="text-amber-400" />
-                              <span>+1 Ponto</span>
+                              <span>{atingiuBrinde ? '10/10' : '+1 Ponto'}</span>
                             </button>
 
                             <button

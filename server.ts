@@ -241,16 +241,30 @@ app.patch("/api/clientes/:id/pontos", (req, res) => {
   const { id } = req.params;
   const { pontos } = req.body;
 
-  if (typeof pontos !== 'number') {
+  if (typeof pontos !== 'number' || Number.isNaN(pontos)) {
     return res.status(400).json({ error: "Valor de pontos inválido" });
   }
 
+  const pontosLimpos = Math.max(0, Math.min(10, Math.floor(pontos)));
   const index = dbMemory.clientes.findIndex(c => c.id === id || c.email === id);
   if (index >= 0) {
-    dbMemory.clientes[index].pontos = pontos;
-    dbMemory.clientes[index].pontosFidelidade = pontos;
+    dbMemory.clientes[index].pontos = pontosLimpos;
+    dbMemory.clientes[index].pontosFidelidade = pontosLimpos;
+    if (pontosLimpos < 10) {
+      dbMemory.clientes[index].brindeSolicitado = false;
+    }
     dbMemory.clientes[index].updatedAt = new Date().toISOString();
     salvarBanco(dbMemory);
+
+    if (serverDb && dbMemory.clientes[index].id) {
+      setDoc(doc(serverDb, "clientes", dbMemory.clientes[index].id), {
+        pontos: pontosLimpos,
+        pontosFidelidade: pontosLimpos,
+        ...(pontosLimpos < 10 ? { brindeSolicitado: false } : {}),
+        updatedAt: dbMemory.clientes[index].updatedAt
+      }, { merge: true }).catch(() => {});
+    }
+
     return res.json(dbMemory.clientes[index]);
   }
 
