@@ -102,7 +102,7 @@ import RelatorioFinanceiro from './RelatorioFinanceiro';
 import SistemaChecklist from './SistemaChecklist';
 import ModuloPDV from './ModuloPDV';
 import ModuloProdutos from './ModuloProdutos';
-import { formatarCelular, formatarCEP } from '../utils/formatters';
+import { formatarCelular, formatarCEP, deduplicarBanners, sanitizarParaFirestore } from '../utils/formatters';
 
 interface PainelLavaJatoProps {
   unidadeNome?: string;
@@ -203,6 +203,16 @@ export default function PainelLavaJato({
     const slugSemTraco = semAcento.replace(/[^a-z0-9]/g, '');
     if (slugSemTraco) aliases.add(slugSemTraco);
 
+    // Se for a unidade padrão ou Pit Stop, incluir explicitamente todas as variações de pit stop
+    if (isPitStop) {
+      aliases.add('pitstop');
+      aliases.add('pit-stop');
+      aliases.add('pit stop');
+      aliases.add('pit stop lava jato');
+      aliases.add('pit-stop-lava-jato');
+      aliases.add('pitstoplavajato');
+    }
+
     try {
       const salvos = localStorage.getItem('hubwash_lava_jatos');
       if (salvos) {
@@ -223,12 +233,12 @@ export default function PainelLavaJato({
       }
     } catch {}
 
-    // Remove palavras genéricas que causavam falso positivo e vazamento entre empresas diferentes
+    // Remove palavras genéricas isoladas que causavam falso positivo e vazamento entre empresas diferentes
     const stopwords = new Set(['lava', 'jato', 'lavajato', 'posto', 'car', 'wash', 'auto', 'express']);
     return Array.from(aliases).filter(a => a && !stopwords.has(a));
-  }, [unidadeNome, unidadeSlugSanitizada]);
+  }, [unidadeNome, unidadeSlugSanitizada, isPitStop]);
 
-  // Validador estrito de pertencimento à unidade
+  // Validador flexível e estrito de pertencimento à unidade (garante sincronização perfeita do app do cliente)
   const matchUnidade = (docData: any): boolean => {
     if (!docData) return false;
     const docId = String(
@@ -240,19 +250,35 @@ export default function PainelLavaJato({
 
     const docNome = String(docData.unidadeNome || '').toLowerCase().trim();
 
-    // 1. Se tem ID de unidade cadastrado
+    // 1. Se for a unidade padrão Pit Stop
+    if (isPitStop) {
+      if (!docId && !docNome) return true;
+      if (docId === 'pitstop' || docId.includes('pitstop') || docId.includes('pit-stop')) return true;
+      if (docNome.includes('pit stop') || docNome.includes('pitstop')) return true;
+    }
+
+    // 2. Se tem ID de unidade cadastrado
     if (docId) {
-      return aliasesUnidade.includes(docId);
+      if (aliasesUnidade.includes(docId)) return true;
+      const docAlfa = docId.replace(/[^a-z0-9]/g, '');
+      const slugAlfa = unidadeSlugSanitizada.replace(/[^a-z0-9]/g, '');
+      if (docAlfa && slugAlfa && (docAlfa === slugAlfa || docAlfa.includes(slugAlfa) || slugAlfa.includes(docAlfa))) {
+        return true;
+      }
     }
 
-    // 2. Se tem apenas o nome da empresa por extenso
+    // 3. Se tem nome da empresa por extenso
     if (docNome) {
-      return aliasesUnidade.includes(docNome) || 
-             docNome === unidadeSlugSanitizada || 
-             docNome === (unidadeNome || '').toLowerCase().trim();
+      if (aliasesUnidade.includes(docNome)) return true;
+      if (docNome === unidadeSlugSanitizada || docNome === (unidadeNome || '').toLowerCase().trim()) return true;
+      const docNomeAlfa = docNome.replace(/[^a-z0-9]/g, '');
+      const nomeAlfa = (unidadeNome || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (docNomeAlfa && nomeAlfa && (docNomeAlfa === nomeAlfa || docNomeAlfa.includes(nomeAlfa) || nomeAlfa.includes(docNomeAlfa))) {
+        return true;
+      }
     }
 
-    // 3. Documento legado sem nenhuma unidade vinculada: pertence exclusivamente ao Pit Stop
+    // 4. Documento sem identificação de unidade: pertence ao Pit Stop
     return isPitStop;
   };
 
@@ -567,11 +593,28 @@ export default function PainelLavaJato({
   // ==========================================
   const [agendamentos, setAgendamentos] = useState<AgendamentoPWA[]>(() => {
     try {
-      const salvosUnidade = localStorage.getItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`);
-      if (salvosUnidade) return JSON.parse(salvosUnidade);
-      if (isPitStop) {
-        const salvos = localStorage.getItem('hubwash_agendamentos_painel');
-        return salvos ? JSON.parse(salvos) : [];
+      const mapa = new Map<string, AgendamentoPWA>();
+      const fontes = [
+        localStorage.getItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`),
+        localStorage.getItem('hubwash_agendamentos_painel'),
+        localStorage.getItem('hubwash_agendamentos_pwa'),
+        localStorage.getItem(`hubwash_agendamentos_${unidadeSlugSanitizada}`)
+      ];
+      fontes.forEach(str => {
+        if (!str) return;
+        try {
+          const arr = JSON.parse(str);
+          if (Array.isArray(arr)) {
+            arr.forEach((item: any) => {
+              if (item && item.id && !mapa.has(item.id)) {
+                mapa.set(item.id, item);
+              }
+            });
+          }
+        } catch {}
+      });
+      if (mapa.size > 0) {
+        return Array.from(mapa.values());
       }
     } catch {}
     return [];
@@ -681,48 +724,80 @@ export default function PainelLavaJato({
 
   // 🔄 Ouvinte em tempo real de novos agendamentos criados no celular/PWA
   useEffect(() => {
-    const sincronizarStorageLocal = () => {
+    const sincronizarStorageLocal = (e?: any) => {
       try {
-        const salvos = localStorage.getItem('hubwash_agendamentos_painel');
-        if (salvos) {
-          const lista = JSON.parse(salvos);
-          if (Array.isArray(lista) && lista.length > 0) {
+        // Se recebeu o agendamento diretamente via CustomEvent detail
+        if (e && e.detail && e.detail.id) {
+          const itemDireto = e.detail;
+          if (matchUnidade(itemDireto) && !idsExcluidosRef.current.has(itemDireto.id)) {
             setAgendamentos((prev) => {
-              const mapa = new Map<string, AgendamentoPWA>();
-              prev
-                .filter(item => !idsExcluidosRef.current.has(item.id))
-                .forEach(item => mapa.set(item.id, item));
-              let novosAdicionados = false;
-              lista.forEach((item: any) => {
-                if (idsExcluidosRef.current.has(item.id)) return;
-                const pertence = matchUnidade(item);
-                if (pertence && !mapa.has(item.id)) {
-                  novosAdicionados = true;
-                }
-                if (pertence) {
-                  mapa.set(item.id, item);
-                }
-              });
-              if (novosAdicionados) {
-                mostrarToast('🔔 Novo agendamento sincronizado pelo celular!', 'sucesso');
-              }
-              return Array.from(mapa.values());
+              if (prev.some(a => a.id === itemDireto.id)) return prev;
+              mostrarToast(`🔔 Novo agendamento via celular: ${itemDireto.cliente || 'Cliente'} às ${itemDireto.horario || ''}!`, 'sucesso');
+              const atualizado = [itemDireto, ...prev];
+              try {
+                localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(atualizado));
+                localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(atualizado));
+              } catch {}
+              return atualizado;
             });
           }
         }
+
+        const fontes = [
+          localStorage.getItem('hubwash_agendamentos_painel'),
+          localStorage.getItem('hubwash_agendamentos_pwa'),
+          localStorage.getItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`),
+          localStorage.getItem(`hubwash_agendamentos_${unidadeSlugSanitizada}`)
+        ];
+
+        setAgendamentos((prev) => {
+          const mapa = new Map<string, AgendamentoPWA>();
+          prev
+            .filter(item => !idsExcluidosRef.current.has(item.id))
+            .forEach(item => mapa.set(item.id, item));
+          let novosAdicionados = false;
+
+          fontes.forEach(salvos => {
+            if (!salvos) return;
+            try {
+              const lista = JSON.parse(salvos);
+              if (Array.isArray(lista) && lista.length > 0) {
+                lista.forEach((item: any) => {
+                  if (!item || !item.id || idsExcluidosRef.current.has(item.id)) return;
+                  const pertence = matchUnidade(item);
+                  if (pertence && !mapa.has(item.id)) {
+                    novosAdicionados = true;
+                  }
+                  if (pertence) {
+                    mapa.set(item.id, item);
+                  }
+                });
+              }
+            } catch {}
+          });
+
+          if (novosAdicionados) {
+            mostrarToast('🔔 Novo agendamento sincronizado pelo celular!', 'sucesso');
+          }
+          return Array.from(mapa.values());
+        });
       } catch {}
     };
 
     window.addEventListener('storage', sincronizarStorageLocal);
-    window.addEventListener('hubwash_agendamento_criado', sincronizarStorageLocal);
+    window.addEventListener('hubwash_agendamento_criado', sincronizarStorageLocal as EventListener);
+    window.addEventListener('hubwash_agendamento_alterado', sincronizarStorageLocal as EventListener);
+    window.addEventListener('hubwash_novo_agendamento', sincronizarStorageLocal as EventListener);
     const intervalStorage = setInterval(sincronizarStorageLocal, 2000);
 
     return () => {
       window.removeEventListener('storage', sincronizarStorageLocal);
-      window.removeEventListener('hubwash_agendamento_criado', sincronizarStorageLocal);
+      window.removeEventListener('hubwash_agendamento_criado', sincronizarStorageLocal as EventListener);
+      window.removeEventListener('hubwash_agendamento_alterado', sincronizarStorageLocal as EventListener);
+      window.removeEventListener('hubwash_novo_agendamento', sincronizarStorageLocal as EventListener);
       clearInterval(intervalStorage);
     };
-  }, [aliasesUnidade]);
+  }, [aliasesUnidade, unidadeSlugSanitizada]);
 
   // Modal de QR Code do Balcão para Cadastro de Clientes
   const [modalQrCode, setModalQrCode] = useState(false);
@@ -781,7 +856,16 @@ export default function PainelLavaJato({
                 servico: data.servico || 'Lavagem Completa',
                 data: data.data || 'Hoje',
                 horario: data.horario || '12:00',
-                status: (data.status as any) || 'Pendente'
+                status: (data.status as any) || 'Pendente',
+                unidadeId: data.unidadeId || unidadeSlugSanitizada,
+                unidadeVinculadaId: data.unidadeVinculadaId || unidadeSlugSanitizada,
+                levaETraz: Boolean(data.levaETraz),
+                statusLevaETraz: data.statusLevaETraz || (data.levaETraz ? 'Solicitado' : undefined),
+                enderecoColeta: data.enderecoColeta,
+                complementoEndereco: data.complementoEndereco,
+                observacoesLevaETraz: data.observacoesLevaETraz,
+                motoristaResponsavel: data.motoristaResponsavel,
+                taxaLevaETraz: data.taxaLevaETraz
               });
             }
           });
@@ -795,6 +879,7 @@ export default function PainelLavaJato({
               });
               const final = Array.from(mapa.values());
               try {
+                localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(final));
                 localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(final));
               } catch {}
               return final;
@@ -820,6 +905,8 @@ export default function PainelLavaJato({
             data: a.data || 'Hoje',
             horario: a.horario || '12:00',
             status: a.status || 'Pendente',
+            unidadeId: a.unidadeId || unidadeSlugSanitizada,
+            unidadeVinculadaId: a.unidadeVinculadaId || unidadeSlugSanitizada,
             levaETraz: Boolean(a.levaETraz),
             statusLevaETraz: a.statusLevaETraz,
             enderecoColeta: a.enderecoColeta,
@@ -835,33 +922,51 @@ export default function PainelLavaJato({
               if (!mapa.has(a.id)) mapa.set(a.id, a);
             });
             const final = Array.from(mapa.values());
-            localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(final));
+            try {
+              localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(final));
+              localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(final));
+            } catch {}
             return final;
           });
           carregados += agsServidor.length;
         }
       } catch {}
 
-      // 3. Verifica armazenamento local compartilhado
+      // 3. Verifica armazenamento local compartilhado (todas as fontes de sincronização)
       try {
-        const salvos = localStorage.getItem('hubwash_agendamentos_painel');
-        if (salvos) {
-          const lista = JSON.parse(salvos);
-          if (Array.isArray(lista) && lista.length > 0) {
-            setAgendamentos((prev) => {
-              const mapa = new Map<string, AgendamentoPWA>();
-              prev.forEach((a) => mapa.set(a.id, a));
-              lista.forEach((a: any) => {
-                const pertence = matchUnidade(a);
-                if (pertence && !mapa.has(a.id)) {
-                  mapa.set(a.id, a);
-                  carregados++;
-                }
+        const fontes = [
+          localStorage.getItem('hubwash_agendamentos_painel'),
+          localStorage.getItem('hubwash_agendamentos_pwa'),
+          localStorage.getItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`),
+          localStorage.getItem(`hubwash_agendamentos_${unidadeSlugSanitizada}`)
+        ];
+
+        fontes.forEach(salvos => {
+          if (!salvos) return;
+          try {
+            const lista = JSON.parse(salvos);
+            if (Array.isArray(lista) && lista.length > 0) {
+              setAgendamentos((prev) => {
+                const mapa = new Map<string, AgendamentoPWA>();
+                prev.forEach((a) => mapa.set(a.id, a));
+                lista.forEach((a: any) => {
+                  if (idsExcluidosRef.current.has(a.id)) return;
+                  const pertence = matchUnidade(a);
+                  if (pertence && !mapa.has(a.id)) {
+                    mapa.set(a.id, a);
+                    carregados++;
+                  }
+                });
+                const final = Array.from(mapa.values());
+                try {
+                  localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(final));
+                  localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(final));
+                } catch {}
+                return final;
               });
-              return Array.from(mapa.values());
-            });
-          }
-        }
+            }
+          } catch {}
+        });
       } catch {}
 
       if (carregados > 0) {
@@ -880,8 +985,12 @@ export default function PainelLavaJato({
   // 8. BANNERS PROMOCIONAIS
   // ==========================================
   const [banners, setBanners] = useState<BannerPromocional[]>(() => {
-    const salvos = localStorage.getItem('hubwash_banners');
-    return salvos ? JSON.parse(salvos) : [];
+    try {
+      const salvos = localStorage.getItem('hubwash_banners');
+      return salvos ? deduplicarBanners(JSON.parse(salvos)) : [];
+    } catch {
+      return [];
+    }
   });
   const [novoBannerTitulo, setNovoBannerTitulo] = useState('');
   const [novoBannerImg, setNovoBannerImg] = useState('');
@@ -889,12 +998,14 @@ export default function PainelLavaJato({
   const [novoBannerDesconto, setNovoBannerDesconto] = useState('');
   const [metodoImagemBanner, setMetodoImagemBanner] = useState<'galeria' | 'url'>('galeria');
   const [carregandoImagemBanner, setCarregandoImagemBanner] = useState(false);
+  const [publicandoBanner, setPublicandoBanner] = useState(false);
   const fileInputBannerRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    localStorage.setItem('hubwash_banners', JSON.stringify(banners));
+    const unicos = deduplicarBanners(banners);
+    localStorage.setItem('hubwash_banners', JSON.stringify(unicos));
     if (unidadeLogada) {
-      localStorage.setItem(`hubwash_banners_${unidadeLogada}`, JSON.stringify(banners));
+      localStorage.setItem(`hubwash_banners_${unidadeLogada}`, JSON.stringify(unicos));
     }
   }, [banners, unidadeLogada]);
 
@@ -945,6 +1056,7 @@ export default function PainelLavaJato({
   }, [servicos, unidadeLogada]);
 
   const isFirstLoadAgendamentos = useRef(true);
+  const firestoreAgendamentoIdsRef = useRef<Set<string>>(new Set());
 
   // ➡️ SINCRONIZAÇÃO EM TEMPO REAL ENTRE MOBILE E COMPUTADOR/NOTEBOOK (API SERVIDOR + FIRESTORE)
   useEffect(() => {
@@ -1006,19 +1118,22 @@ export default function PainelLavaJato({
               };
             });
 
-          setAgendamentos(() => {
+          setAgendamentos((prev) => {
             const mapa = new Map<string, AgendamentoPWA>();
-            agendamentosMapeados.forEach((item) => mapa.set(item.id, item));
+            prev
+              .filter(item => !idsExcluidosRef.current.has(item.id))
+              .forEach(item => mapa.set(item.id, item));
+            agendamentosMapeados
+              .filter(item => !idsExcluidosRef.current.has(item.id))
+              .forEach((item) => mapa.set(item.id, item));
             return Array.from(mapa.values());
           });
         }
 
         if (dados.banners && Array.isArray(dados.banners) && dados.banners.length > 0) {
           setBanners((prev) => {
-            const mapa = new Map<string, BannerPromocional>();
-            prev.forEach((b) => mapa.set(b.id, b));
-            dados.banners.forEach((b: any) => mapa.set(b.id, b));
-            return Array.from(mapa.values());
+            const combinados = [...dados.banners, ...prev];
+            return deduplicarBanners(combinados);
           });
         }
 
@@ -1144,6 +1259,8 @@ export default function PainelLavaJato({
                   data: data.data || 'Hoje',
                   horario: data.horario || '12:00',
                   status: (data.status as any) || 'Pendente',
+                  unidadeId: data.unidadeId || unidadeSlugSanitizada,
+                  unidadeVinculadaId: data.unidadeVinculadaId || unidadeSlugSanitizada,
                   levaETraz: Boolean(data.levaETraz),
                   statusLevaETraz: data.statusLevaETraz || (data.levaETraz ? 'Solicitado' : undefined),
                   enderecoColeta: data.enderecoColeta,
@@ -1170,20 +1287,31 @@ export default function PainelLavaJato({
             }
             isFirstLoadAgendamentos.current = false;
 
-            setAgendamentos(() => {
+            const novosIdsFirestore = new Set<string>(agendamentosFirestore.map(a => a.id));
+            const idsAnterioresFirestore = firestoreAgendamentoIdsRef.current;
+
+            setAgendamentos((prev) => {
               const mapa = new Map<string, AgendamentoPWA>();
+              // 1. Mantém itens locais/servidor que não foram excluídos manualmente e não sumiram do Firestore após já terem existido lá
+              prev.forEach((item) => {
+                if (idsExcluidosRef.current.has(item.id)) return;
+                if (idsAnterioresFirestore.has(item.id) && !novosIdsFirestore.has(item.id)) return;
+                mapa.set(item.id, item);
+              });
+              // 2. Sobrescreve / adiciona com os dados oficiais mais recentes do Firestore
               agendamentosFirestore
                 .filter(a => !idsExcluidosRef.current.has(a.id))
                 .forEach((a) => mapa.set(a.id, a));
+
               const listaFinal = Array.from(mapa.values());
               try {
                 localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(listaFinal));
-                if (isPitStop) {
-                  localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(listaFinal));
-                }
+                localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(listaFinal));
               } catch {}
               return listaFinal;
             });
+
+            firestoreAgendamentoIdsRef.current = novosIdsFirestore;
           },
           (error: any) => {
             console.warn('Firestore onSnapshot agendamentos (Painel):', error);
@@ -1201,9 +1329,10 @@ export default function PainelLavaJato({
               const pertence = !docUnidade || aliasesUnidade.some(alias => 
                 docUnidade === alias || docUnidade.includes(alias) || alias.includes(docUnidade)
               );
-              if (pertence && !idsExcluidosRef.current.has(docSnap.id)) {
+              const idDoc = data.id || docSnap.id;
+              if (pertence && !idsExcluidosRef.current.has(idDoc) && !idsExcluidosRef.current.has(docSnap.id)) {
                 bannersFirestore.push({
-                  id: docSnap.id,
+                  id: idDoc,
                   titulo: data.titulo || 'Promoção',
                   status: data.status || 'Ativo',
                   imagem: data.imagem || '',
@@ -1217,16 +1346,10 @@ export default function PainelLavaJato({
 
             if (bannersFirestore.length > 0) {
               setBanners((prev) => {
-                const mapa = new Map<string, BannerPromocional>();
-                bannersFirestore
-                  .filter(b => !idsExcluidosRef.current.has(b.id))
-                  .forEach((b) => mapa.set(b.id, b));
-                prev
-                  .filter(b => !idsExcluidosRef.current.has(b.id))
-                  .forEach((b) => {
-                    if (!mapa.has(b.id)) mapa.set(b.id, b);
-                  });
-                return Array.from(mapa.values());
+                const listaCombinada = [...bannersFirestore, ...prev];
+                return deduplicarBanners(
+                  listaCombinada.filter(b => !idsExcluidosRef.current.has(b.id))
+                );
               });
             }
           },
@@ -1420,7 +1543,9 @@ export default function PainelLavaJato({
       setAgendamentos(prev => {
         const atualizados = prev.filter(item => item.id !== id);
         try {
+          localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(atualizados));
           localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(atualizados));
+          localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(atualizados));
         } catch {}
         return atualizados;
       });
@@ -1625,6 +1750,7 @@ export default function PainelLavaJato({
       const agsAtualizados = agendamentos.map(a => a.id === agId ? { ...a, status: statusAgendamento } : a);
       setAgendamentos(agsAtualizados);
       try {
+        localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(agsAtualizados));
         localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(agsAtualizados));
         localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(agsAtualizados));
       } catch {}
@@ -1753,6 +1879,7 @@ export default function PainelLavaJato({
     const agsAtualizados = agendamentos.map(a => a.id === ag.id ? { ...a, status: 'Espera' as const } : a);
     setAgendamentos(agsAtualizados);
     try {
+      localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(agsAtualizados));
       localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(agsAtualizados));
       localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(agsAtualizados));
     } catch {}
@@ -1823,6 +1950,7 @@ export default function PainelLavaJato({
       const agsAtualizados = agendamentos.map(a => a.id === agId ? { ...a, status: 'Espera' as const } : a);
       setAgendamentos(agsAtualizados);
       try {
+        localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(agsAtualizados));
         localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(agsAtualizados));
         localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(agsAtualizados));
       } catch {}
@@ -1996,17 +2124,17 @@ export default function PainelLavaJato({
   ) => {
     const statusLevaVal: string | undefined = ['Buscando', 'Entregando', 'Entregue'].includes(novoStatus) ? novoStatus : undefined;
 
-    setAgendamentos((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, status: novoStatus, statusLevaETraz: (statusLevaVal as any) || a.statusLevaETraz } : a))
-    );
-
-    try {
-      const atualizados = agendamentos.map((a) =>
+    setAgendamentos((prev) => {
+      const atualizados = prev.map((a) =>
         a.id === id ? { ...a, status: novoStatus, statusLevaETraz: (statusLevaVal as any) || a.statusLevaETraz } : a
       );
-      localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(atualizados));
-      localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(atualizados));
-    } catch {}
+      try {
+        localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(atualizados));
+        localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(atualizados));
+        localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(atualizados));
+      } catch {}
+      return atualizados;
+    });
 
     window.dispatchEvent(
       new CustomEvent('hubwash_status_lavagem_atualizado', {
@@ -2381,13 +2509,25 @@ export default function PainelLavaJato({
       data: 'Hoje',
       horario: novoAgendHorario,
       status: novoAgendLevaETraz ? 'Solicitado' : 'Confirmado',
-      levaETraz: novoAgendLevaETraz,
-      statusLevaETraz: novoAgendLevaETraz ? 'Solicitado' : undefined,
-      enderecoColeta: novoAgendLevaETraz ? novoAgendEnderecoColeta.trim() : undefined,
-      complementoEndereco: novoAgendLevaETraz && novoAgendComplemento.trim() ? novoAgendComplemento.trim() : undefined
+      unidadeId: unidadeLogada,
+      unidadeVinculadaId: unidadeLogada,
+      levaETraz: Boolean(novoAgendLevaETraz),
+      ...(novoAgendLevaETraz ? {
+        statusLevaETraz: 'Solicitado',
+        enderecoColeta: novoAgendEnderecoColeta.trim(),
+        ...(novoAgendComplemento.trim() ? { complementoEndereco: novoAgendComplemento.trim() } : {})
+      } : {})
     };
 
-    setAgendamentos([novo, ...agendamentos]);
+    const listaAtualizada = [novo, ...agendamentos];
+    setAgendamentos(listaAtualizada);
+    try {
+      localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(listaAtualizada));
+      localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(listaAtualizada));
+      localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(listaAtualizada));
+      window.dispatchEvent(new Event('hubwash_agendamento_alterado'));
+    } catch {}
+
     setNovoAgendCliente('');
     setNovoAgendVeiculo('');
     setNovoAgendTel('');
@@ -2395,42 +2535,31 @@ export default function PainelLavaJato({
     setNovoAgendEnderecoColeta('');
     setNovoAgendComplemento('');
 
+    const payloadSanitizado = sanitizarParaFirestore({
+      id: tempId,
+      unidadeId: unidadeLogada,
+      unidadeVinculadaId: unidadeLogada,
+      unidadeNome: unidadeNome,
+      unidadeSlug: unidadeSlugSanitizada,
+      cliente: novo.cliente,
+      telefone: novo.telefone,
+      veiculo: novo.veiculo,
+      servico: novo.servico,
+      data: novo.data,
+      horario: novo.horario,
+      status: novo.status,
+      levaETraz: novo.levaETraz,
+      statusLevaETraz: novo.statusLevaETraz,
+      enderecoColeta: novo.enderecoColeta,
+      complementoEndereco: novo.complementoEndereco,
+      createdAt: new Date().toISOString()
+    });
+
     try {
-      await salvarAgendamentoServidor({
-        id: tempId,
-        unidadeId: unidadeLogada,
-        unidadeVinculadaId: unidadeLogada,
-        cliente: novo.cliente,
-        telefone: novo.telefone,
-        veiculo: novo.veiculo,
-        servico: novo.servico,
-        data: novo.data,
-        horario: novo.horario,
-        status: novo.status,
-        levaETraz: novo.levaETraz,
-        statusLevaETraz: novo.statusLevaETraz,
-        enderecoColeta: novo.enderecoColeta,
-        complementoEndereco: novo.complementoEndereco,
-        createdAt: new Date().toISOString()
-      });
+      await salvarAgendamentoServidor(payloadSanitizado as any);
 
       if (db) {
-        await addDoc(collection(db, 'agendamentos'), {
-          unidadeId: unidadeLogada,
-          unidadeVinculadaId: unidadeLogada,
-          cliente: novo.cliente,
-          telefone: novo.telefone,
-          veiculo: novo.veiculo,
-          servico: novo.servico,
-          data: novo.data,
-          horario: novo.horario,
-          status: novo.status,
-          levaETraz: novo.levaETraz,
-          statusLevaETraz: novo.statusLevaETraz,
-          enderecoColeta: novo.enderecoColeta,
-          complementoEndereco: novo.complementoEndereco,
-          createdAt: new Date().toISOString()
-        });
+        await setDoc(doc(db, 'agendamentos', tempId), payloadSanitizado);
       }
     } catch (err) {
       console.warn('Agendamento salvo localmente:', err);
@@ -2523,9 +2652,11 @@ export default function PainelLavaJato({
     reader.readAsDataURL(file);
   };
 
-  // Adicionar Banner
+  // Adicionar ou Atualizar Banner
   const handleAdicionarBanner = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (publicandoBanner) return;
+
     if (!novoBannerTitulo.trim()) {
       mostrarToast('Digite o título do banner promocional.', 'erro');
       return;
@@ -2536,48 +2667,72 @@ export default function PainelLavaJato({
       return;
     }
 
-    const bannerId = `ban_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const novo: BannerPromocional = {
-      id: bannerId,
-      titulo: novoBannerTitulo.trim(),
-      status: 'Ativo',
-      imagem: novoBannerImg.trim(),
-      unidadeId: unidadeLogada,
-      descricao: novoBannerDescricao.trim() || undefined,
-      desconto: novoBannerDesconto.trim() || undefined
-    };
-
-    const listaAtualizada = [novo, ...banners.filter(b => b.id !== bannerId)];
-    setBanners(listaAtualizada);
-    try {
-      localStorage.setItem('hubwash_banners', JSON.stringify(listaAtualizada));
-      if (unidadeLogada) localStorage.setItem(`hubwash_banners_${unidadeLogada}`, JSON.stringify(listaAtualizada));
-      window.dispatchEvent(new CustomEvent('hubwash_banners_atualizados', { detail: listaAtualizada }));
-      window.dispatchEvent(new Event('hubwash_banners_atualizados'));
-    } catch {}
-
-    setNovoBannerTitulo('');
-    setNovoBannerImg('');
-    setNovoBannerDescricao('');
-    setNovoBannerDesconto('');
-    if (fileInputBannerRef.current) {
-      fileInputBannerRef.current.value = '';
-    }
-    mostrarToast('Novo banner promocional publicado no App Cliente!', 'sucesso');
+    setPublicandoBanner(true);
 
     try {
-      await salvarBannerServidor(novo);
-      if (db) {
-        await setDoc(doc(db, 'banners', bannerId), {
-          ...novo,
-          id: bannerId,
-          unidadeId: unidadeLogada,
-          status: 'Ativo',
-          createdAt: new Date().toISOString()
-        });
+      const tituloFormatado = novoBannerTitulo.trim();
+      const tituloNorm = tituloFormatado.toLowerCase();
+
+      // Verifica se já existe um banner com mesmo título nesta unidade para atualizar em vez de duplicar
+      const bannerExistente = banners.find(b => 
+        String(b.titulo || '').toLowerCase().trim() === tituloNorm &&
+        (!b.unidadeId || b.unidadeId === unidadeLogada)
+      );
+
+      const bannerId = bannerExistente?.id || `ban_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const novo: BannerPromocional = {
+        id: bannerId,
+        titulo: tituloFormatado,
+        status: 'Ativo',
+        imagem: novoBannerImg.trim(),
+        unidadeId: unidadeLogada,
+        descricao: novoBannerDescricao.trim() || undefined,
+        desconto: novoBannerDesconto.trim() || undefined
+      };
+
+      // Deduplica rigorosamente a lista para nunca conter itens repetidos
+      const listaAtualizada = deduplicarBanners([
+        novo,
+        ...banners.filter(b => b.id !== bannerId && String(b.titulo || '').toLowerCase().trim() !== tituloNorm)
+      ]);
+
+      setBanners(listaAtualizada);
+      try {
+        localStorage.setItem('hubwash_banners', JSON.stringify(listaAtualizada));
+        if (unidadeLogada) localStorage.setItem(`hubwash_banners_${unidadeLogada}`, JSON.stringify(listaAtualizada));
+        window.dispatchEvent(new CustomEvent('hubwash_banners_atualizados', { detail: listaAtualizada }));
+        window.dispatchEvent(new Event('hubwash_banners_atualizados'));
+      } catch {}
+
+      setNovoBannerTitulo('');
+      setNovoBannerImg('');
+      setNovoBannerDescricao('');
+      setNovoBannerDesconto('');
+      if (fileInputBannerRef.current) {
+        fileInputBannerRef.current.value = '';
       }
-    } catch (err) {
-      console.warn('Erro ao sincronizar banner:', err);
+
+      mostrarToast(
+        bannerExistente ? 'Banner atualizado com sucesso no App Cliente!' : 'Novo banner promocional publicado no App Cliente!',
+        'sucesso'
+      );
+
+      try {
+        await salvarBannerServidor(novo);
+        if (db) {
+          await setDoc(doc(db, 'banners', bannerId), {
+            ...novo,
+            id: bannerId,
+            unidadeId: unidadeLogada,
+            status: 'Ativo',
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        }
+      } catch (err) {
+        console.warn('Erro ao sincronizar banner:', err);
+      }
+    } finally {
+      setPublicandoBanner(false);
     }
   };
 
@@ -4224,10 +4379,19 @@ export default function PainelLavaJato({
 
                 // Atualiza o agendamento de origem se vinculado
                 if (agendamentoIdOrigem) {
-                  setAgendamentos(prev => prev.map(a => a.id === agendamentoIdOrigem ? { ...a, status: 'Vistoriado' } : a));
+                  setAgendamentos(prev => {
+                    const atualizados = prev.map(a => a.id === agendamentoIdOrigem ? { ...a, status: 'Vistoriado' as const } : a);
+                    try {
+                      localStorage.setItem(`hubwash_agendamentos_painel_${unidadeSlugSanitizada}`, JSON.stringify(atualizados));
+                      localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(atualizados));
+                      localStorage.setItem('hubwash_agendamentos_pwa', JSON.stringify(atualizados));
+                      window.dispatchEvent(new Event('hubwash_agendamento_alterado'));
+                    } catch {}
+                    return atualizados;
+                  });
                   if (db) {
                     try {
-                      updateDoc(doc(db, 'agendamentos', agendamentoIdOrigem), { status: 'Vistoriado' }).catch(() => {});
+                      setDoc(doc(db, 'agendamentos', agendamentoIdOrigem), { status: 'Vistoriado', updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
                     } catch {}
                   }
                 }
@@ -4248,12 +4412,12 @@ export default function PainelLavaJato({
 
                 if (db) {
                   try {
-                    addDoc(collection(db, 'checklists'), {
+                    addDoc(collection(db, 'checklists'), sanitizarParaFirestore({
                       ...novaVistoria,
                       unidadeId: unidadeSlugSanitizada,
                       unidadeNome,
                       createdAt: new Date().toISOString()
-                    }).catch(err => console.warn('Sync checklist Firestore:', err));
+                    })).catch(err => console.warn('Sync checklist Firestore:', err));
                   } catch (e) {
                     console.warn('Erro ao salvar checklist:', e);
                   }
@@ -4991,11 +5155,20 @@ export default function PainelLavaJato({
 
                   <button
                     type="submit"
-                    disabled={carregandoImagemBanner}
+                    disabled={publicandoBanner || carregandoImagemBanner}
                     className={`w-full py-2.5 px-4 ${temaClasses.bg} text-white font-bold rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50`}
                   >
-                    <Upload size={15} />
-                    <span>Publicar no App Cliente</span>
+                    {publicandoBanner ? (
+                      <>
+                        <RefreshCw size={15} className="animate-spin" />
+                        <span>Publicando Banner...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Upload size={15} />
+                        <span>Publicar no App Cliente</span>
+                      </>
+                    )}
                   </button>
                 </form>
               </div>
@@ -5007,7 +5180,7 @@ export default function PainelLavaJato({
                 </h3>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {banners.map((b) => (
+                  {deduplicarBanners(banners).map((b) => (
                     <div
                       key={b.id}
                       className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-lg space-y-3"

@@ -264,13 +264,34 @@ app.delete("/api/clientes/:id", (req, res) => {
   res.json({ success: true });
 });
 
+function matchUnidadeServer(docUnidade: string | undefined | null, queryUnidade: string | undefined | null): boolean {
+  if (!queryUnidade) return true;
+  if (!docUnidade) return true;
+  const uDoc = String(docUnidade).toLowerCase().trim();
+  const uQ = String(queryUnidade).toLowerCase().trim();
+  if (!uDoc || !uQ) return true;
+  if (uDoc === uQ || uDoc.includes(uQ) || uQ.includes(uDoc)) return true;
+
+  // Alfanumérico (ignora traços, sublinhados, espaços, etc.)
+  const docAlfa = uDoc.replace(/[^a-z0-9]/g, '');
+  const qAlfa = uQ.replace(/[^a-z0-9]/g, '');
+  if (docAlfa && qAlfa && (docAlfa === qAlfa || docAlfa.includes(qAlfa) || qAlfa.includes(docAlfa))) return true;
+
+  // Equivalência Pit Stop
+  const isPitDoc = uDoc.includes('pitstop') || uDoc.includes('pit-stop') || uDoc.includes('pit stop');
+  const isPitQ = uQ.includes('pitstop') || uQ.includes('pit-stop') || uQ.includes('pit stop');
+  if (isPitDoc && isPitQ) return true;
+
+  return false;
+}
+
 // --- AGENDAMENTOS ---
 app.get("/api/agendamentos", (req, res) => {
   const unidadeId = req.query.unidadeId ? String(req.query.unidadeId).toLowerCase() : null;
   if (unidadeId) {
     const filtrados = dbMemory.agendamentos.filter(a => {
-      const u = String(a.unidadeId || a.unidadeVinculadaId || '').toLowerCase();
-      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+      const u = String(a.unidadeId || a.unidadeVinculadaId || a.unidadeSlug || a.unidadeNome || '').toLowerCase();
+      return matchUnidadeServer(u, unidadeId);
     });
     return res.json(filtrados);
   }
@@ -294,33 +315,37 @@ app.post("/api/agendamentos", (req, res) => {
     dbMemory.agendamentos.unshift(itemFormatado);
   }
 
+  const itemLimpo = JSON.parse(JSON.stringify(itemFormatado));
   salvarBanco(dbMemory);
 
   if (serverDb) {
-    setDoc(doc(serverDb, "agendamentos", id), itemFormatado).catch((err: any) => 
+    setDoc(doc(serverDb, "agendamentos", id), itemLimpo).catch((err: any) => 
       console.warn("Aviso ao sincronizar agendamento no Firestore (server):", err)
     );
   }
 
-  res.status(201).json(itemFormatado);
+  res.status(201).json(itemLimpo);
 });
 
 app.patch("/api/agendamentos/:id", (req, res) => {
   const { id } = req.params;
   const index = dbMemory.agendamentos.findIndex(a => a.id === id);
+  const patchLimpo = JSON.parse(JSON.stringify({ ...req.body, updatedAt: new Date().toISOString() }));
   if (index >= 0) {
     dbMemory.agendamentos[index] = {
       ...dbMemory.agendamentos[index],
-      ...req.body,
-      updatedAt: new Date().toISOString()
+      ...patchLimpo
     };
     salvarBanco(dbMemory);
 
     if (serverDb) {
-      setDoc(doc(serverDb, "agendamentos", id), dbMemory.agendamentos[index], { merge: true }).catch(() => {});
+      setDoc(doc(serverDb, "agendamentos", id), JSON.parse(JSON.stringify(dbMemory.agendamentos[index])), { merge: true }).catch(() => {});
     }
 
     return res.json(dbMemory.agendamentos[index]);
+  }
+  if (serverDb) {
+    setDoc(doc(serverDb, "agendamentos", id), patchLimpo, { merge: true }).catch(() => {});
   }
   res.status(404).json({ error: "Agendamento não encontrado" });
 });
@@ -441,7 +466,14 @@ app.get("/api/banners", (req, res) => {
 
 app.post("/api/banners", (req, res) => {
   const novo = req.body;
+  if (!Array.isArray(dbMemory.banners)) {
+    dbMemory.banners = [];
+  }
+
   const id = novo.id || `banner_${Date.now()}`;
+  const tituloNorm = String(novo.titulo || '').toLowerCase().trim();
+  const unidadeNorm = String(novo.unidadeId || '').toLowerCase().trim();
+
   const formatado = {
     ...novo,
     id,
@@ -449,13 +481,14 @@ app.post("/api/banners", (req, res) => {
     createdAt: novo.createdAt || new Date().toISOString()
   };
 
-  if (!Array.isArray(dbMemory.banners)) {
-    dbMemory.banners = [];
-  }
+  // Busca por ID ou pelo mesmo título na mesma unidade para atualizar sem duplicar
+  const idx = dbMemory.banners.findIndex((b: any) => 
+    b.id === id || 
+    (tituloNorm && String(b.titulo || '').toLowerCase().trim() === tituloNorm && String(b.unidadeId || '').toLowerCase().trim() === unidadeNorm)
+  );
 
-  const idx = dbMemory.banners.findIndex((b: any) => b.id === id);
   if (idx >= 0) {
-    dbMemory.banners[idx] = { ...dbMemory.banners[idx], ...formatado };
+    dbMemory.banners[idx] = { ...dbMemory.banners[idx], ...formatado, id: dbMemory.banners[idx].id || id };
   } else {
     dbMemory.banners.unshift(formatado);
   }
@@ -740,27 +773,27 @@ app.get("/api/sync", (req, res) => {
   if (unidadeId) {
     clientes = clientes.filter(c => {
       const u = String(c.unidadeVinculadaId || c.unidadeId || '').toLowerCase();
-      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+      return matchUnidadeServer(u, unidadeId);
     });
     agendamentos = agendamentos.filter(a => {
       const u = String(a.unidadeId || a.unidadeVinculadaId || a.unidadeSlug || a.unidadeNome || '').toLowerCase();
-      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+      return matchUnidadeServer(u, unidadeId);
     });
     fila = fila.filter(f => {
       const u = String(f.unidadeId || '').toLowerCase();
-      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+      return matchUnidadeServer(u, unidadeId);
     });
     banners = banners.filter((b: any) => {
       const u = String(b.unidadeId || '').toLowerCase();
-      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+      return matchUnidadeServer(u, unidadeId);
     });
     servicos = servicos.filter((s: any) => {
       const u = String(s.unidadeId || '').toLowerCase();
-      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+      return matchUnidadeServer(u, unidadeId);
     });
     produtos = produtos.filter((p: any) => {
       const u = String(p.unidadeId || '').toLowerCase();
-      return !u || u === unidadeId || u.includes(unidadeId) || unidadeId.includes(u);
+      return matchUnidadeServer(u, unidadeId);
     });
     vendas = vendas.filter((v: any) => {
       const u = String(v.unidadeId || '').toLowerCase();

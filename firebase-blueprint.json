@@ -27,19 +27,33 @@
     },
     "Agendamento": {
       "title": "Agendamento",
-      "description": "Agendamento de serviço de lavagem",
+      "description": "Agendamento de serviço de lavagem e solicitações de Leva e Traz",
       "type": "object",
       "properties": {
+        "id": { "type": "string", "maxLength": 100 },
         "unidadeId": { "type": "string", "maxLength": 100 },
+        "unidadeVinculadaId": { "type": "string", "maxLength": 100 },
+        "unidadeNome": { "type": "string", "maxLength": 150 },
+        "unidadeSlug": { "type": "string", "maxLength": 100 },
         "cliente": { "type": "string", "maxLength": 150 },
         "email": { "type": "string", "maxLength": 150 },
         "telefone": { "type": "string", "maxLength": 50 },
         "veiculo": { "type": "string", "maxLength": 150 },
+        "placa": { "type": "string", "maxLength": 20 },
         "servico": { "type": "string", "maxLength": 150 },
+        "valor": { "type": "number" },
         "data": { "type": "string", "maxLength": 30 },
         "horario": { "type": "string", "maxLength": 20 },
         "status": { "type": "string", "maxLength": 50 },
-        "createdAt": { "type": "string" }
+        "levaETraz": { "type": "boolean" },
+        "statusLevaETraz": { "type": "string", "maxLength": 50 },
+        "enderecoColeta": { "type": "string", "maxLength": 300 },
+        "complementoEndereco": { "type": "string", "maxLength": 200 },
+        "observacoesLevaETraz": { "type": "string", "maxLength": 500 },
+        "motoristaResponsavel": { "type": "string", "maxLength": 150 },
+        "taxaLevaETraz": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
       },
       "required": ["unidadeId", "veiculo", "servico", "data", "horario", "status"]
     },
@@ -173,6 +187,27 @@
         "dataHora": { "type": "string" }
       },
       "required": ["itens", "total", "data", "metodoPagamento"]
+    },
+    "Configuracao": {
+      "title": "Configuracao",
+      "description": "Configurações globais e senha master do SaaS",
+      "type": "object",
+      "properties": {
+        "senhaMaster": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "DispositivoFCM": {
+      "title": "DispositivoFCM",
+      "description": "Tokens de dispositivos registrados para Web Push Notifications (FCM)",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "clienteId": { "type": "string" },
+        "unidadeId": { "type": "string" },
+        "atualizadoEm": { "type": "string" }
+      },
+      "required": ["token", "clienteId"]
     }
   },
   "firestore": {
@@ -207,6 +242,14 @@
     "/vendas/{vendaId}": {
       "schema": { "$ref": "#/entities/Venda" },
       "description": "Coleção de vendas realizadas no PDV"
+    },
+    "/configuracoes/{configId}": {
+      "schema": { "$ref": "#/entities/Configuracao" },
+      "description": "Coleção de configurações globais e segurança"
+    },
+    "/dispositivos_fcm/{tokenId}": {
+      "schema": { "$ref": "#/entities/DispositivoFCM" },
+      "description": "Coleção de tokens FCM para notificações push"
     }
   }
 }

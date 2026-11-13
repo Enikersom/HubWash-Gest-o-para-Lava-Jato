@@ -57,6 +57,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // 🔔 DISPOSITIVOS FCM (Tokens de notificação Push Web/Mobile)
+    match /dispositivos_fcm/{tokenId} {
+      allow read, write: if true;
+    }
+
     // 🛑 BLOQUEIO PADRÃO: Impede criação de coleções desconhecidas
     match /{document=**} {
       allow read, write: if false;

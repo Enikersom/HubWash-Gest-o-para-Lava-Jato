@@ -48,7 +48,7 @@ import {
   isApiServidorDisponivel
 } from '../services/apiSync';
 import { BannerPromocional, ServicoLavaJato } from '../types';
-import { formatarCelular, formatarCEP } from '../utils/formatters';
+import { formatarCelular, formatarCEP, deduplicarBanners, sanitizarParaFirestore, unidadesSaoEquivalentes } from '../utils/formatters';
 import { solicitarPermissaoPushFCM } from '../services/fcmPush';
 
 export interface UnidadeLavaJato {
@@ -410,7 +410,10 @@ export default function AppClientePWA({
     let mensagem = `Seu serviço agora está como: ${novoStatus}`;
 
     const s = (novoStatus || '').toLowerCase().trim();
-    if (s === 'espera') {
+    if (s === 'buscando') {
+      titulo = '🚚 Motorista a Caminho (Coleta)';
+      mensagem = `Nossa equipe saiu para buscar ${veiculoFinal} no seu endereço!`;
+    } else if (s === 'espera') {
       titulo = '🚗 Veículo na Fila de Lavagem';
       mensagem = `${veiculoFinal} foi recebido no pátio e está na fila aguardando liberação do box.`;
     } else if (s === 'lavando') {
@@ -419,6 +422,9 @@ export default function AppClientePWA({
     } else if (s === 'pronto') {
       titulo = '✨ Veículo Pronto para Retirada!';
       mensagem = `${veiculoFinal} está pronto, brilhando e perfumado! Pode vir retirar na recepção.`;
+    } else if (s === 'entregando') {
+      titulo = '🚚 Motorista Saindo para Entrega!';
+      mensagem = `${veiculoFinal} está limpo e já saiu para ser entregue no seu endereço!`;
     } else if (s === 'concluido' || s === 'entregue') {
       titulo = '🎉 Lavagem Finalizada & Entregue!';
       mensagem = `Veículo entregue com sucesso! Obrigado pela preferência no ${unidadeAtual?.nomeFantasia || 'Lava Jato'}.`;
@@ -457,7 +463,7 @@ export default function AppClientePWA({
   const [banners, setBanners] = useState<BannerPromocional[]>(() => {
     try {
       const salvos = localStorage.getItem('hubwash_banners');
-      return salvos ? JSON.parse(salvos) : [];
+      return salvos ? deduplicarBanners(JSON.parse(salvos)) : [];
     } catch {
       return [];
     }
@@ -610,8 +616,9 @@ export default function AppClientePWA({
       );
     });
 
-    if (customAtivos.length > 0) {
-      return customAtivos;
+    const unicos = deduplicarBanners(customAtivos);
+    if (unicos.length > 0) {
+      return unicos;
     }
     return bannersPadrao;
   }, [banners, bannersPadrao, unidadeAtual, unidadeIdNormalizada]);
@@ -828,7 +835,14 @@ export default function AppClientePWA({
               horario: a.horario || '',
               veiculo: a.veiculo || 'Veículo',
               servico: a.servico || 'Lavagem Completa',
-              status: a.status || 'Pendente'
+              status: a.status || 'Pendente',
+              levaETraz: Boolean(a.levaETraz),
+              statusLevaETraz: a.statusLevaETraz || (a.levaETraz ? 'Solicitado' : undefined),
+              enderecoColeta: a.enderecoColeta,
+              complementoEndereco: a.complementoEndereco,
+              observacoesLevaETraz: a.observacoesLevaETraz,
+              motoristaResponsavel: a.motoristaResponsavel,
+              taxaLevaETraz: a.taxaLevaETraz
             }));
 
             setTodosAgendamentos(prev => {
@@ -937,9 +951,10 @@ export default function AppClientePWA({
                 (uNomeNorm && bUId.includes(uNomeNorm)) ||
                 (uNomeNorm && uNomeNorm.includes(bUId));
 
+              const idDoc = data.id || docSnap.id;
               if (pertence) {
                 bannersFirestore.push({
-                  id: docSnap.id,
+                  id: idDoc,
                   titulo: data.titulo || 'Promoção',
                   status: data.status || 'Ativo',
                   imagem: data.imagem || '',
@@ -951,9 +966,10 @@ export default function AppClientePWA({
               }
             });
 
-            setBanners(bannersFirestore);
+            const unicos = deduplicarBanners(bannersFirestore);
+            setBanners(unicos);
             try {
-              localStorage.setItem('hubwash_banners', JSON.stringify(bannersFirestore));
+              localStorage.setItem('hubwash_banners', JSON.stringify(unicos));
             } catch {}
           },
           (error: any) => {
@@ -1010,8 +1026,13 @@ export default function AppClientePWA({
                 docUnidade === unidadeIdNormalizada || 
                 docUnidade.includes(unidadeIdNormalizada) || 
                 unidadeIdNormalizada.includes(docUnidade) ||
-                (unidadeAtual && docUnidade.includes(unidadeAtual.id.toLowerCase())) ||
-                (unidadeAtual && docUnidade.includes(unidadeAtual.nomeFantasia.toLowerCase()));
+                unidadesSaoEquivalentes(docUnidade, unidadeIdNormalizada) ||
+                (unidadeAtual && (
+                  docUnidade.includes(unidadeAtual.id.toLowerCase()) ||
+                  docUnidade.includes(unidadeAtual.nomeFantasia.toLowerCase()) ||
+                  unidadesSaoEquivalentes(docUnidade, unidadeAtual.id) ||
+                  unidadesSaoEquivalentes(docUnidade, unidadeAtual.nomeFantasia)
+                ));
 
               if (pertence) {
                 listaFirestore.push({
@@ -1024,7 +1045,14 @@ export default function AppClientePWA({
                   horario: data.horario || '',
                   veiculo: data.veiculo || (data.modelo ? `${data.modelo}${data.placa ? ` (${data.placa})` : ''}` : 'Veículo'),
                   servico: data.servico || 'Lavagem Completa',
-                  status: data.status || 'Pendente'
+                  status: data.status || 'Pendente',
+                  levaETraz: Boolean(data.levaETraz),
+                  statusLevaETraz: data.statusLevaETraz || (data.levaETraz ? 'Solicitado' : undefined),
+                  enderecoColeta: data.enderecoColeta,
+                  complementoEndereco: data.complementoEndereco,
+                  observacoesLevaETraz: data.observacoesLevaETraz,
+                  motoristaResponsavel: data.motoristaResponsavel,
+                  taxaLevaETraz: data.taxaLevaETraz
                 });
               }
             });
@@ -1301,7 +1329,7 @@ export default function AppClientePWA({
 
         try {
           if (db) {
-            await addDoc(collection(db, 'clientes'), {
+            await addDoc(collection(db, 'clientes'), sanitizarParaFirestore({
               ...novoCliente,
               veiculoPrincipal: veiculoTexto,
               pontos: 0,
@@ -1311,7 +1339,7 @@ export default function AppClientePWA({
               unidadeNome: unidadeAtual.nomeFantasia,
               unidadeSlug: unidadeAtual.id,
               createdAt: new Date().toISOString()
-            });
+            }));
           }
         } catch (fErr) {
           console.warn('Sync Firestore cliente:', fErr);
@@ -1415,7 +1443,11 @@ export default function AppClientePWA({
     }
 
     const horarioOcupado = todosAgendamentos.some(
-      (ag) => ag.unidadeId === unidadeAtual.id && ag.data === agendaData && ag.horario === agendaHora && ag.status !== 'Cancelado'
+      (ag) =>
+        (ag.unidadeId === unidadeAtual.id || ag.unidadeId === unidadeIdNormalizada || unidadesSaoEquivalentes(ag.unidadeId, unidadeIdNormalizada)) &&
+        ag.data === agendaData &&
+        ag.horario === agendaHora &&
+        ag.status !== 'Cancelado'
     );
 
     if (horarioOcupado) {
@@ -1447,11 +1479,13 @@ export default function AppClientePWA({
         veiculo: veiculoCompleto,
         servico: agendaServico,
         status: 'Pendente',
-        levaETraz: solicitarLevaETrazNaAgenda,
-        statusLevaETraz: solicitarLevaETrazNaAgenda ? 'Solicitado' : undefined,
-        enderecoColeta: solicitarLevaETrazNaAgenda ? agendaLevaEndereco.trim() : undefined,
-        complementoEndereco: solicitarLevaETrazNaAgenda && agendaLevaComplemento.trim() ? agendaLevaComplemento.trim() : undefined,
-        observacoesLevaETraz: solicitarLevaETrazNaAgenda && agendaLevaObs.trim() ? agendaLevaObs.trim() : undefined
+        levaETraz: Boolean(solicitarLevaETrazNaAgenda),
+        ...(solicitarLevaETrazNaAgenda ? {
+          statusLevaETraz: 'Solicitado',
+          enderecoColeta: agendaLevaEndereco.trim(),
+          ...(agendaLevaComplemento.trim() ? { complementoEndereco: agendaLevaComplemento.trim() } : {}),
+          ...(agendaLevaObs.trim() ? { observacoesLevaETraz: agendaLevaObs.trim() } : {})
+        } : {})
       };
 
       // Atualiza o estado local evitando qualquer duplicação por chave
@@ -1466,96 +1500,93 @@ export default function AppClientePWA({
         return [novoAgendamento, ...semDuplicados];
       });
 
+      const eraLevaETraz = solicitarLevaETrazNaAgenda;
       // 🛑 Limpa os estados de data e hora imediatamente e volta para Home para evitar cliques duplicados
       const dataAgendada = agendaData;
       const horaAgendada = agendaHora;
       const servicoAgendado = agendaServico;
       setAgendaHora('');
       setAgendaData(hojeString);
+      setSolicitarLevaETrazNaAgenda(false);
       setTelaAtiva('home');
-      
-      // 1. Envia diretamente ao Servidor Central (sincronização imediata com o notebook no escritório)
-      await salvarAgendamentoServidor({
+
+      const itemPainel = sanitizarParaFirestore({
         id: agendamentoId,
-        unidadeId: unidadeIdNormalizada,
-        cliente: novoAgendamento.cliente || 'Cliente',
-        telefone: novoAgendamento.telefone || '(11) 99999-0000',
-        email: novoAgendamento.email,
+        cliente: usuarioLogado.nome || 'Cliente',
+        telefone: usuarioLogado.contato || '(11) 99999-0000',
+        email: usuarioLogado.email || '',
+        veiculo: veiculoCompleto,
+        servico: servicoAgendado,
         data: dataAgendada,
         horario: horaAgendada,
-        veiculo: novoAgendamento.veiculo,
-        servico: servicoAgendado,
         status: 'Pendente',
-        levaETraz: novoAgendamento.levaETraz,
+        unidadeId: unidadeIdNormalizada,
+        unidadeVinculadaId: unidadeIdNormalizada,
+        unidadeNome: unidadeAtual.nomeFantasia,
+        unidadeSlug: unidadeAtual.id,
+        levaETraz: Boolean(novoAgendamento.levaETraz),
         statusLevaETraz: novoAgendamento.statusLevaETraz,
         enderecoColeta: novoAgendamento.enderecoColeta,
         complementoEndereco: novoAgendamento.complementoEndereco,
-        observacoesLevaETraz: novoAgendamento.observacoesLevaETraz
+        observacoesLevaETraz: novoAgendamento.observacoesLevaETraz,
+        createdAt: new Date().toISOString()
       });
 
-      // 2. Salva no localStorage compartilhado e dispara evento em tempo real para o Painel
+      // 1. Envia diretamente ao Servidor Central (sincronização imediata com o notebook no escritório)
+      let salvoServidor = false;
       try {
-        const itemPainel = {
-          id: agendamentoId,
-          cliente: usuarioLogado.nome || 'Cliente',
-          telefone: usuarioLogado.contato || '(11) 99999-0000',
-          veiculo: veiculoCompleto,
-          servico: servicoAgendado,
-          data: dataAgendada,
-          horario: horaAgendada,
-          status: 'Pendente',
-          unidadeId: unidadeIdNormalizada,
-          unidadeVinculadaId: unidadeIdNormalizada,
-          unidadeNome: unidadeAtual.nomeFantasia,
-          unidadeSlug: unidadeAtual.id,
-          levaETraz: novoAgendamento.levaETraz,
-          statusLevaETraz: novoAgendamento.statusLevaETraz,
-          enderecoColeta: novoAgendamento.enderecoColeta,
-          complementoEndereco: novoAgendamento.complementoEndereco,
-          observacoesLevaETraz: novoAgendamento.observacoesLevaETraz
-        };
-        const salvosPainel = localStorage.getItem('hubwash_agendamentos_painel');
-        const listaPainel = salvosPainel ? JSON.parse(salvosPainel) : [];
-        const listaFinal = [itemPainel, ...listaPainel.filter((a: any) => a.id !== agendamentoId)];
-        localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(listaFinal));
-        window.dispatchEvent(new CustomEvent('hubwash_agendamento_criado', { detail: itemPainel }));
+        const resSrv = await salvarAgendamentoServidor(itemPainel as any);
+        salvoServidor = Boolean(resSrv);
       } catch {}
 
-      // 3. Grava o documento em tempo real no Firebase Firestore com setDoc e ID idêntico
+      // 2. Salva no localStorage compartilhado (todas as chaves) e dispara evento em tempo real para o Painel
+      try {
+        const chavesPainel = [
+          'hubwash_agendamentos_painel',
+          `hubwash_agendamentos_painel_${unidadeIdNormalizada}`,
+          `hubwash_agendamentos_${unidadeIdNormalizada}`
+        ];
+        chavesPainel.forEach(chave => {
+          try {
+            const salvosPainel = localStorage.getItem(chave);
+            const listaPainel = salvosPainel ? JSON.parse(salvosPainel) : [];
+            const listaFinal = [itemPainel, ...(Array.isArray(listaPainel) ? listaPainel : []).filter((a: any) => a.id !== agendamentoId)];
+            localStorage.setItem(chave, JSON.stringify(listaFinal));
+          } catch {}
+        });
+        window.dispatchEvent(new CustomEvent('hubwash_agendamento_criado', { detail: itemPainel }));
+        window.dispatchEvent(new CustomEvent('hubwash_agendamento_alterado', { detail: itemPainel }));
+      } catch {}
+
+      // 3. Grava o documento em tempo real no Firebase Firestore com setDoc e payload 100% sanitizado (sem campos undefined)
+      let salvoFirestore = false;
       try {
         if (db) {
-          await setDoc(doc(db, 'agendamentos', agendamentoId), {
-            id: agendamentoId,
-            unidadeId: unidadeIdNormalizada,
-            unidadeVinculadaId: unidadeIdNormalizada,
-            unidadeNome: unidadeAtual.nomeFantasia,
-            unidadeSlug: unidadeAtual.id,
-            cliente: usuarioLogado.nome || 'Cliente',
-            telefone: usuarioLogado.contato || '(11) 99999-0000',
-            email: usuarioLogado.email || '',
-            veiculo: veiculoCompleto,
-            servico: servicoAgendado,
-            data: dataAgendada,
-            horario: horaAgendada,
-            status: 'Pendente',
-            levaETraz: novoAgendamento.levaETraz,
-            statusLevaETraz: novoAgendamento.statusLevaETraz,
-            enderecoColeta: novoAgendamento.enderecoColeta,
-            complementoEndereco: novoAgendamento.complementoEndereco,
-            observacoesLevaETraz: novoAgendamento.observacoesLevaETraz,
-            createdAt: new Date().toISOString()
-          });
+          await setDoc(doc(db, 'agendamentos', agendamentoId), itemPainel);
+          salvoFirestore = true;
         }
       } catch (firebaseErr) {
-        console.warn('Agendamento salvo localmente / servidor:', firebaseErr);
+        console.error('Erro ao gravar agendamento no Firestore (tentando addDoc):', firebaseErr);
+        try {
+          if (db) {
+            await addDoc(collection(db, 'agendamentos'), itemPainel);
+            salvoFirestore = true;
+          }
+        } catch (addErr) {
+          console.error('Fallback addDoc agendamento falhou:', addErr);
+        }
       }
 
-      mostrarToast(
-        solicitarLevaETrazNaAgenda
-          ? '🚚 Agendamento com Leva e Traz solicitado com sucesso!'
-          : '🎉 Serviço agendado com sucesso!',
-        'sucesso'
-      );
+      if (!salvoServidor && !salvoFirestore) {
+        mostrarToast('⚠️ Agendamento salvo no aparelho, mas sem conexão com a nuvem do lava-jato. Verifique sua internet.', 'info');
+      } else {
+        mostrarToast(
+          eraLevaETraz
+            ? '🚚 Agendamento com Leva e Traz solicitado com sucesso!'
+            : '🎉 Serviço agendado com sucesso!',
+          'sucesso'
+        );
+      }
     } catch (err) {
       console.error('Erro ao agendar serviço:', err);
       mostrarToast('Ocorreu um problema ao registrar seu agendamento. Tente novamente.', 'erro');
@@ -1627,91 +1658,84 @@ export default function AppClientePWA({
         levaETraz: true,
         statusLevaETraz: 'Solicitado',
         enderecoColeta: enderecoCompleto,
-        complementoEndereco: levaComplemento.trim() || undefined,
-        observacoesLevaETraz: levaObservacoes.trim() || undefined
+        ...(levaComplemento.trim() ? { complementoEndereco: levaComplemento.trim() } : {}),
+        ...(levaObservacoes.trim() ? { observacoesLevaETraz: levaObservacoes.trim() } : {})
       };
 
       setTodosAgendamentos(prev => [novoAgendamento, ...prev.filter(a => a.id !== agendamentoId)]);
 
-      // 1. Envia ao Servidor Central
-      await salvarAgendamentoServidor({
+      const itemPainel = sanitizarParaFirestore({
         id: agendamentoId,
-        unidadeId: unidadeIdNormalizada,
-        cliente: novoAgendamento.cliente || 'Cliente',
-        telefone: novoAgendamento.telefone || '(11) 99999-0000',
-        email: novoAgendamento.email,
-        data: levaData,
-        horario: levaHora,
+        cliente: usuarioLogado.nome || 'Cliente',
+        telefone: usuarioLogado.contato || '(11) 99999-0000',
+        email: usuarioLogado.email || '',
         veiculo: veiculoCompleto,
         servico: servicoFinal,
+        data: levaData,
+        horario: levaHora,
         status: 'Pendente',
+        unidadeId: unidadeIdNormalizada,
+        unidadeVinculadaId: unidadeIdNormalizada,
+        unidadeNome: unidadeAtual.nomeFantasia,
+        unidadeSlug: unidadeAtual.id,
         levaETraz: true,
         statusLevaETraz: 'Solicitado',
         enderecoColeta: enderecoCompleto,
         complementoEndereco: levaComplemento.trim() || undefined,
-        observacoesLevaETraz: levaObservacoes.trim() || undefined
+        observacoesLevaETraz: levaObservacoes.trim() || undefined,
+        createdAt: new Date().toISOString()
       });
 
-      // 2. Local storage compartilhado com o Painel
+      // 1. Envia ao Servidor Central
+      let salvoServidor = false;
       try {
-        const itemPainel = {
-          id: agendamentoId,
-          cliente: usuarioLogado.nome || 'Cliente',
-          telefone: usuarioLogado.contato || '(11) 99999-0000',
-          veiculo: veiculoCompleto,
-          servico: servicoFinal,
-          data: levaData,
-          horario: levaHora,
-          status: 'Pendente',
-          unidadeId: unidadeIdNormalizada,
-          unidadeVinculadaId: unidadeIdNormalizada,
-          unidadeNome: unidadeAtual.nomeFantasia,
-          unidadeSlug: unidadeAtual.id,
-          levaETraz: true,
-          statusLevaETraz: 'Solicitado',
-          enderecoColeta: enderecoCompleto,
-          complementoEndereco: levaComplemento.trim() || undefined,
-          observacoesLevaETraz: levaObservacoes.trim() || undefined
-        };
-        const salvosPainel = localStorage.getItem('hubwash_agendamentos_painel');
-        const listaPainel = salvosPainel ? JSON.parse(salvosPainel) : [];
-        const listaFinal = [itemPainel, ...listaPainel.filter((a: any) => a.id !== agendamentoId)];
-        localStorage.setItem('hubwash_agendamentos_painel', JSON.stringify(listaFinal));
-        window.dispatchEvent(new CustomEvent('hubwash_agendamento_criado', { detail: itemPainel }));
+        const resSrv = await salvarAgendamentoServidor(itemPainel as any);
+        salvoServidor = Boolean(resSrv);
       } catch {}
 
-      // 3. Firestore
+      // 2. Local storage compartilhado com o Painel (todas as chaves)
+      try {
+        const chavesPainel = [
+          'hubwash_agendamentos_painel',
+          `hubwash_agendamentos_painel_${unidadeIdNormalizada}`,
+          `hubwash_agendamentos_${unidadeIdNormalizada}`
+        ];
+        chavesPainel.forEach(chave => {
+          try {
+            const salvosPainel = localStorage.getItem(chave);
+            const listaPainel = salvosPainel ? JSON.parse(salvosPainel) : [];
+            const listaFinal = [itemPainel, ...(Array.isArray(listaPainel) ? listaPainel : []).filter((a: any) => a.id !== agendamentoId)];
+            localStorage.setItem(chave, JSON.stringify(listaFinal));
+          } catch {}
+        });
+        window.dispatchEvent(new CustomEvent('hubwash_agendamento_criado', { detail: itemPainel }));
+        window.dispatchEvent(new CustomEvent('hubwash_agendamento_alterado', { detail: itemPainel }));
+      } catch {}
+
+      // 3. Firestore com payload 100% sanitizado (sem campos undefined)
+      let salvoFirestore = false;
       if (db) {
         try {
-          await setDoc(doc(db, 'agendamentos', agendamentoId), {
-            id: agendamentoId,
-            unidadeId: unidadeIdNormalizada,
-            unidadeVinculadaId: unidadeIdNormalizada,
-            unidadeNome: unidadeAtual.nomeFantasia,
-            unidadeSlug: unidadeAtual.id,
-            cliente: usuarioLogado.nome || 'Cliente',
-            telefone: usuarioLogado.contato || '(11) 99999-0000',
-            email: usuarioLogado.email || '',
-            veiculo: veiculoCompleto,
-            servico: servicoFinal,
-            data: levaData,
-            horario: levaHora,
-            status: 'Pendente',
-            levaETraz: true,
-            statusLevaETraz: 'Solicitado',
-            enderecoColeta: enderecoCompleto,
-            complementoEndereco: levaComplemento.trim() || undefined,
-            observacoesLevaETraz: levaObservacoes.trim() || undefined,
-            createdAt: new Date().toISOString()
-          });
+          await setDoc(doc(db, 'agendamentos', agendamentoId), itemPainel);
+          salvoFirestore = true;
         } catch (e) {
-          console.warn('Erro ao salvar Leva e Traz no Firestore:', e);
+          console.error('Erro ao salvar Leva e Traz no Firestore (tentando addDoc):', e);
+          try {
+            await addDoc(collection(db, 'agendamentos'), itemPainel);
+            salvoFirestore = true;
+          } catch (addErr) {
+            console.error('Fallback addDoc Leva e Traz falhou:', addErr);
+          }
         }
       }
 
       setModalLevaETraz(false);
       setTelaAtiva('home');
-      mostrarToast('🚚 Solicitação de Leva e Traz enviada! Acompanhe o status do seu veículo ao vivo.', 'sucesso');
+      if (!salvoServidor && !salvoFirestore) {
+        mostrarToast('⚠️ Pedido salvo localmente, mas sem conexão com a nuvem do lava-jato. Verifique sua internet.', 'info');
+      } else {
+        mostrarToast('🚚 Solicitação de Leva e Traz enviada! Acompanhe o status do seu veículo ao vivo.', 'sucesso');
+      }
     } catch (err) {
       console.error('Erro ao enviar solicitação de leva e traz:', err);
       mostrarToast('Erro ao enviar pedido de Leva e Traz. Tente novamente.', 'erro');
@@ -1762,7 +1786,11 @@ export default function AppClientePWA({
   const meusAgendamentos = useMemo(() => {
     if (!usuarioLogado) return [];
     const filtrados = todosAgendamentos.filter(ag => {
-      const pertenceUnidade = !ag.unidadeId || ag.unidadeId === unidadeAtual?.id || ag.unidadeId === unidadeIdNormalizada;
+      const pertenceUnidade = !ag.unidadeId ||
+        ag.unidadeId === unidadeAtual?.id ||
+        ag.unidadeId === unidadeIdNormalizada ||
+        unidadesSaoEquivalentes(ag.unidadeId, unidadeIdNormalizada) ||
+        unidadesSaoEquivalentes(ag.unidadeId, unidadeAtual?.nomeFantasia);
       if (!pertenceUnidade) return false;
 
       const emailIgual = usuarioLogado.email && ag.email && ag.email.toLowerCase().trim() === usuarioLogado.email.toLowerCase().trim();
