@@ -27,9 +27,10 @@ import {
   UserPlus,
   Crown,
   Sparkles,
-  Infinity
+  Infinity,
+  ShieldCheck
 } from 'lucide-react';
-import { LavaJato } from '../types';
+import { LavaJato, UsuarioSistema } from '../types';
 import { URL_BASE_NETLIFY } from '../constants';
 import { 
   db, 
@@ -46,15 +47,16 @@ import {
   atualizarStatusUnidadeServidor,
   excluirUnidadeServidor
 } from '../services/apiSync';
-import { formatarCelular, formatarCEP, formatarCpfCnpj } from '../utils/formatters';
+import { formatarCelular, formatarCEP, formatarCpfCnpj, sanitizarParaFirestore } from '../utils/formatters';
 
 interface AdminMasterProps {
+  usuarioAuth?: UsuarioSistema | null;
   onLogout?: () => void;
   onIrParaLavaJato?: (nome?: string) => void;
   onIrParaCliente?: (nome?: string, tela?: 'cadastro' | 'login' | 'home') => void;
 }
 
-export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaCliente }: AdminMasterProps) {
+export default function AdminMaster({ usuarioAuth, onLogout, onIrParaLavaJato, onIrParaCliente }: AdminMasterProps) {
   const [lavaJatos, setLavaJatos] = useState<LavaJato[]>(() => {
     const saved = localStorage.getItem('hubwash_lava_jatos');
     if (saved) {
@@ -134,6 +136,54 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
       localStorage.setItem('hubwash_lava_jatos', JSON.stringify(novos));
     } catch (e) {
       console.warn('Erro ao salvar no localStorage:', e);
+    }
+  };
+
+  const [usuariosSistema, setUsuariosSistema] = useState<UsuarioSistema[]>([]);
+
+  // Escuta usuários autenticados via Firebase Auth (UID e permissões por unidade)
+  useEffect(() => {
+    if (!db) return;
+    try {
+      const unsub = onSnapshot(
+        collection(db, 'usuarios'),
+        (snap) => {
+          const lista: UsuarioSistema[] = [];
+          snap.forEach((docSnap) => {
+            const d = docSnap.data() as UsuarioSistema;
+            lista.push({
+              ...d,
+              uid: d.uid || docSnap.id
+            });
+          });
+          setUsuariosSistema(lista);
+        },
+        (err) => {
+          console.warn('Ouvinte usuários Firebase Auth:', err);
+        }
+      );
+      return () => unsub();
+    } catch {}
+  }, []);
+
+  const atualizarPermissaoUsuario = async (
+    uid: string,
+    updates: Partial<Pick<UsuarioSistema, 'role' | 'unidadeId' | 'unidadeNome' | 'unidadesPermitidas' | 'ativo'>>
+  ) => {
+    const alvo = usuariosSistema.find((u) => u.uid === uid);
+    if (!alvo || !db) return;
+
+    const payload = sanitizarParaFirestore({
+      ...alvo,
+      ...updates,
+      updatedAt: new Date().toISOString()
+    });
+
+    try {
+      await setDoc(doc(db, 'usuarios', uid), payload, { merge: true });
+      mostrarToast(`Permissão do UID ${uid.slice(0, 8)}... atualizada!`, 'sucesso');
+    } catch (err: any) {
+      mostrarToast('Erro ao atualizar permissão: ' + (err?.message || 'verifique as regras'), 'erro');
     }
   };
 
@@ -785,6 +835,17 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
+            {usuarioAuth && (
+              <div
+                className="flex items-center gap-2 text-xs bg-slate-900/90 px-3 py-1.5 rounded-lg border border-cyan-500/30"
+                title={`UID Firebase Auth: ${usuarioAuth.uid}`}
+              >
+                <ShieldCheck size={14} className="text-cyan-400 shrink-0" />
+                <span className="text-slate-200 font-medium max-w-[160px] truncate">{usuarioAuth.email || usuarioAuth.nome}</span>
+                <span className="text-[10px] font-mono text-cyan-400">#{usuarioAuth.uid.slice(0, 6)}</span>
+              </div>
+            )}
+
             <div className="flex items-center gap-2 text-xs bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-700">
               <span className="flex h-2 w-2 relative">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -812,7 +873,7 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
                 type="button"
                 onClick={onLogout}
                 className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-rose-300 hover:text-white border border-rose-500/30 text-xs font-semibold transition cursor-pointer"
-                title="Retornar à tela de autenticação OTP"
+                title="Sair da conta Firebase e retornar à tela de login"
               >
                 <ArrowLeft size={14} />
                 <span>Voltar ao Login</span>
@@ -1309,6 +1370,106 @@ export default function AdminMaster({ onLogout, onIrParaLavaJato, onIrParaClient
           </section>
 
         </div>
+
+        {/* GESTÃO DE USUÁRIOS FIREBASE AUTH & PERMISSÕES POR UNIDADE */}
+        <section className="bg-slate-800 rounded-2xl border border-slate-700 p-6 shadow-xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-700 pb-3">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-cyan-400" /> Usuários Autenticados & Permissões por Unidade (UID)
+              </h2>
+              <p className="text-xs text-slate-400">
+                Controle de operadores identificados pelo UID exclusivo do Firebase Authentication e suas unidades autorizadas.
+              </p>
+            </div>
+            <span className="text-xs font-mono text-cyan-400 bg-slate-900 px-3 py-1 rounded-lg border border-slate-700 self-start">
+              {usuariosSistema.length} usuário(s)
+            </span>
+          </div>
+
+          {usuariosSistema.length === 0 ? (
+            <p className="text-xs text-slate-400 py-4 text-center">
+              Nenhum operador vinculado ainda. Os usuários aparecem aqui automaticamente ao entrar com Google ou E-mail/Senha no Terminal de Acesso.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-700 text-slate-400 uppercase text-[10px] tracking-wider">
+                    <th className="p-3">Usuário / E-mail</th>
+                    <th className="p-3">Firebase UID</th>
+                    <th className="p-3">Papel</th>
+                    <th className="p-3">Unidade Vinculada</th>
+                    <th className="p-3 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700/60">
+                  {usuariosSistema.map((u) => (
+                    <tr key={u.uid} className="hover:bg-slate-900/50 transition">
+                      <td className="p-3">
+                        <p className="font-bold text-white">{u.nome}</p>
+                        <p className="text-[11px] text-slate-400">{u.email}</p>
+                      </td>
+                      <td className="p-3 font-mono text-[11px] text-cyan-400">
+                        {u.uid}
+                      </td>
+                      <td className="p-3">
+                        <select
+                          value={u.role}
+                          onChange={(e) =>
+                            atualizarPermissaoUsuario(u.uid, {
+                              role: e.target.value as 'master' | 'lavajato'
+                            })
+                          }
+                          className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white cursor-pointer"
+                        >
+                          <option value="lavajato">Operador Unidade</option>
+                          <option value="master">Super Admin (Master)</option>
+                        </select>
+                      </td>
+                      <td className="p-3">
+                        <select
+                          value={u.unidadeId}
+                          disabled={u.role === 'master'}
+                          onChange={(e) => {
+                            const novoId = e.target.value;
+                            const info = lavaJatos.find((lj) => lj.id === novoId);
+                            atualizarPermissaoUsuario(u.uid, {
+                              unidadeId: novoId,
+                              unidadeNome: info?.nomeFantasia || novoId,
+                              unidadesPermitidas: [novoId]
+                            });
+                          }}
+                          className="bg-slate-950 border border-slate-700 disabled:opacity-50 rounded-lg px-2 py-1 text-xs text-white cursor-pointer"
+                        >
+                          {u.role === 'master' && <option value="master">Todas as Unidades (*)</option>}
+                          {lavaJatos.map((lj) => (
+                            <option key={lj.id} value={lj.id}>
+                              {lj.nomeFantasia} ({lj.id})
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="p-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => atualizarPermissaoUsuario(u.uid, { ativo: !u.ativo })}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition ${
+                            u.ativo
+                              ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25'
+                              : 'bg-rose-500/15 text-rose-300 border-rose-500/30 hover:bg-rose-500/25'
+                          }`}
+                        >
+                          {u.ativo ? 'Ativo' : 'Bloqueado'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </main>
 
     </div>

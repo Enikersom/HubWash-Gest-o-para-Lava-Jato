@@ -13,6 +13,22 @@ export interface LavaJato {
   statusPlano: 'teste' | 'ativo' | 'vitalicio' | 'bloqueado';
   tipoPlano?: 'mensal' | 'anual' | 'vitalicio';
   logoUrl?: string;
+  proprietarioUid?: string;
+  usuariosAutorizados?: string[];
+}
+
+export interface UsuarioSistema {
+  uid: string;
+  email: string;
+  nome: string;
+  fotoUrl?: string;
+  role: 'master' | 'lavajato' | 'cliente';
+  unidadeId: string;
+  unidadeNome: string;
+  unidadesPermitidas: string[];
+  ativo: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ItemFila {

@@ -1,10 +1,14 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { AlertCircle, ArrowLeft } from 'lucide-react';
 import {
+  auth,
+  signOut,
+  onAuthStateChanged,
   db,
   collection,
   addDoc,
   doc,
+  getDoc,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -20,6 +24,7 @@ import AdminMaster from './components/AdminMaster';
 import PainelLavaJato from './components/PainelLavaJato';
 import AppClientePWA from './components/AppClientePWA';
 import { URL_BASE_APP, URL_BASE_NETLIFY } from './constants';
+import { UsuarioSistema } from './types';
 
 export { URL_BASE_APP, URL_BASE_NETLIFY };
 
@@ -225,14 +230,14 @@ export default function App() {
   const unidadeSlug = rotasUrl.unidadeSlug;
   const rotaSlug = rotasUrl.rotaSlug;
 
-  // Lê sessão salva do operador (Dono do Lava Jato ou Admin Master)
+  // Lê sessão salva do operador somente se possuir UID válido do Firebase Auth
   const sessaoOperadorSalva = (() => {
     try {
       if (typeof window !== 'undefined') {
         const salvo = localStorage.getItem('hubwash_operador_sessao');
         if (salvo) {
           const parsed = JSON.parse(salvo);
-          if (parsed && (parsed.role === 'lavajato' || parsed.role === 'master')) {
+          if (parsed && parsed.uid && (parsed.role === 'lavajato' || parsed.role === 'master')) {
             return parsed;
           }
         }
@@ -240,6 +245,22 @@ export default function App() {
     } catch {}
     return null;
   })();
+
+  const [usuarioAuth, setUsuarioAuth] = useState<UsuarioSistema | null>(() => {
+    if (!sessaoOperadorSalva) return null;
+    return {
+      uid: sessaoOperadorSalva.uid,
+      email: sessaoOperadorSalva.email || '',
+      nome: sessaoOperadorSalva.nome || 'Operador',
+      role: sessaoOperadorSalva.role,
+      unidadeId: sessaoOperadorSalva.unidadeId || 'pitstop',
+      unidadeNome: sessaoOperadorSalva.unidadeNome || 'Pit Stop Lava Jato',
+      unidadesPermitidas: Array.isArray(sessaoOperadorSalva.unidadesPermitidas)
+        ? sessaoOperadorSalva.unidadesPermitidas
+        : [sessaoOperadorSalva.unidadeId || 'pitstop'],
+      ativo: true
+    };
+  });
 
   // 1. Verificação explícita do estado inicial do telaClienteInicial
   const [telaClienteInicial, setTelaClienteInicial] = useState<'login' | 'cadastro' | 'home'>(() => {
@@ -252,7 +273,7 @@ export default function App() {
   const [autenticado, setAutenticado] = useState<boolean>(() => {
     if (isRotaCadastro || isRotaLogin || unidadeSlug) return true;
     if (isRotaPainelDireto) return true;
-    return Boolean(sessaoOperadorSalva);
+    return Boolean(sessaoOperadorSalva && auth.currentUser);
   });
   
   const [telaAtual, setTelaAtual] = useState<'lavajato' | 'master' | 'cliente'>(() => {
@@ -280,6 +301,40 @@ export default function App() {
       return false;
     }
   });
+
+  // Sincronização contínua com o estado oficial do Firebase Authentication
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      const rotas = extrairRotasUrl();
+      const rotaPublicaCliente = rotas.isRotaCadastro || rotas.isRotaLogin || Boolean(rotas.unidadeSlug);
+
+      if (!fbUser) {
+        setUsuarioAuth(null);
+        try {
+          localStorage.removeItem('hubwash_operador_sessao');
+        } catch {}
+        if (!rotaPublicaCliente && !rotas.isRotaPainelDireto) {
+          setAutenticado(false);
+        }
+        return;
+      }
+
+      try {
+        const snap = await getDoc(doc(db, 'usuarios', fbUser.uid));
+        if (snap.exists()) {
+          const dados = snap.data() as UsuarioSistema;
+          if (dados.ativo === false && !rotaPublicaCliente) {
+            setAutenticado(false);
+            setUsuarioAuth(null);
+            return;
+          }
+          setUsuarioAuth({ ...dados, uid: fbUser.uid });
+        }
+      } catch {}
+    });
+
+    return () => unsub();
+  }, []);
 
   // Efeito de sincronização de rota para suportar links dinâmicos e navegação
   useEffect(() => {
@@ -374,12 +429,15 @@ export default function App() {
     </div>
   );
 
-  // TELA DE AUTENTICAÇÃO / LOGIN OTP
+  // TELA DE AUTENTICAÇÃO FIREBASE
   if (!autenticado) {
     return (
       <ErrorBoundary>
         <LoginOTP
-          onSuccess={(role, unidadeNome, telaCliente) => {
+          onSuccess={(role, unidadeNome, telaCliente, usuario) => {
+            if (usuario) {
+              setUsuarioAuth(usuario);
+            }
             setAutenticado(true);
             if (role === 'master') {
               setTelaAtual('master');
@@ -426,10 +484,13 @@ export default function App() {
       <ErrorBoundary>
         <Suspense fallback={fallbackLoading}>
           <AdminMaster
+            usuarioAuth={usuarioAuth}
             onLogout={() => {
               try {
                 localStorage.removeItem('hubwash_operador_sessao');
               } catch {}
+              signOut(auth).catch(() => {});
+              setUsuarioAuth(null);
               setAutenticado(false);
               setTelaAtual('lavajato');
             }}
@@ -455,10 +516,13 @@ export default function App() {
         <PainelLavaJato
           unidadeNome={unidadeSelecionada}
           abrirPDVDireto={isRotaPDV}
+          usuarioAuth={usuarioAuth}
           onLogout={() => {
             try {
               localStorage.removeItem('hubwash_operador_sessao');
             } catch {}
+            signOut(auth).catch(() => {});
+            setUsuarioAuth(null);
             setAutenticado(false);
             setTelaAtual('lavajato');
           }}

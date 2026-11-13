@@ -1,43 +1,127 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { LogIn } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  LogIn,
+  Mail,
+  Lock,
+  UserPlus,
+  ShieldCheck,
+  Building2,
+  KeyRound,
+  LogOut,
+  CheckCircle2,
+  AlertTriangle,
+  Copy,
+  Check,
+  RefreshCw,
+  User as UserIcon
+} from 'lucide-react';
 import { buscarUnidadesServidor } from '../services/apiSync';
-import { db, collection, doc, onSnapshot, getDocs, deleteDoc } from '../firebase';
+import {
+  auth,
+  googleProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signOut,
+  onAuthStateChanged,
+  updateProfile,
+  db,
+  collection,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  onSnapshot,
+  getDocs,
+  deleteDoc,
+  query,
+  where,
+  arrayUnion,
+  handleFirestoreError,
+  OperationType,
+  type FirebaseUser
+} from '../firebase';
+import { UsuarioSistema } from '../types';
+import { sanitizarParaFirestore } from '../utils/formatters';
 
 interface LoginOTPProps {
-  onSuccess: (role?: 'master' | 'lavajato' | 'cliente', unidadeNome?: string, telaCliente?: 'login' | 'cadastro' | 'home') => void;
+  onSuccess: (
+    role?: 'master' | 'lavajato' | 'cliente',
+    unidadeNome?: string,
+    telaCliente?: 'login' | 'cadastro' | 'home',
+    usuario?: UsuarioSistema
+  ) => void;
   defaultRole?: 'master' | 'lavajato' | 'cliente';
 }
 
-export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTPProps) {
-  const [otp, setOtp] = useState<string[]>(['', '', '', '', '', '']);
-  const [modoTextoLivre, setModoTextoLivre] = useState(false);
-  const [senhaLivre, setSenhaLivre] = useState('');
+const BOOTSTRAP_MASTER_EMAIL = 'enikersom2020@gmail.com';
+
+function traduzirErroFirebaseAuth(error: any): string {
+  const code = String(error?.code || '');
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'E-mail ou senha inválidos. Verifique suas credenciais e tente novamente.';
+    case 'auth/invalid-email':
+      return 'O formato do e-mail informado é inválido.';
+    case 'auth/email-already-in-use':
+      return 'Este e-mail já possui uma conta cadastrada. Faça login na aba "Entrar".';
+    case 'auth/weak-password':
+      return 'A senha deve ter pelo menos 6 caracteres.';
+    case 'auth/popup-closed-by-user':
+    case 'auth/cancelled-popup-request':
+      return 'Login com Google cancelado antes da conclusão.';
+    case 'auth/popup-blocked':
+      return 'O navegador bloqueou o pop-up de login. Permita pop-ups para este site ou use E-mail e Senha.';
+    case 'auth/operation-not-allowed':
+      return 'Provedor E-mail/Senha ainda não habilitado no Console do Firebase (Authentication > Sign-in method). Use "Entrar com Google" ou habilite o provedor.';
+    case 'auth/too-many-requests':
+      return 'Muitas tentativas seguidas. Aguarde alguns instantes e tente novamente.';
+    case 'auth/network-request-failed':
+      return 'Falha de conexão com a internet. Verifique sua rede e tente novamente.';
+    default:
+      return error?.message || 'Não foi possível concluir a autenticação. Tente novamente.';
+  }
+}
+
+export default function LoginOTP({ onSuccess }: LoginOTPProps) {
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(auth.currentUser);
+  const [perfilUsuario, setPerfilUsuario] = useState<UsuarioSistema | null>(null);
+  const [carregandoAuth, setCarregandoAuth] = useState<boolean>(true);
+  const [resolvendoPerfil, setResolvendoPerfil] = useState<boolean>(false);
+
+  // Abas do formulário Firebase Auth (Entrar / Criar Conta)
+  const [modoAuth, setModoAuth] = useState<'entrar' | 'cadastrar'>('entrar');
+  const [nomeCadastro, setNomeCadastro] = useState('');
+  const [emailInput, setEmailInput] = useState('');
+  const [senhaInput, setSenhaInput] = useState('');
+  const [enviandoAuth, setEnviandoAuth] = useState(false);
+
+  // Vinculação inicial de UID à Unidade
+  const [unidadeSelecionadaId, setUnidadeSelecionadaId] = useState('pitstop');
+  const [codigoUnidadeInput, setCodigoUnidadeInput] = useState('');
+  const [vinculandoUnidade, setVinculandoUnidade] = useState(false);
+  const [uidCopiado, setUidCopiado] = useState(false);
+
+  // Feedback visual
   const [isSuccess, setIsSuccess] = useState<boolean>(false);
   const [message, setMessage] = useState<{ text: string; type: 'error' | 'info' | 'success' | '' }>({
     text: '',
-    type: '',
-  });
-  const [isVerifying, setIsVerifying] = useState<boolean>(false);
-
-  // Senha Master segura (lida da memória local ou nuvem Firestore)
-  const [senhaMaster, setSenhaMaster] = useState<string>(() => {
-    try {
-      return (typeof window !== 'undefined' ? localStorage.getItem('hubwash_master_pin') : null) || '124020';
-    } catch {
-      return '124020';
-    }
+    type: ''
   });
 
-  const inputsRef = useRef<(HTMLInputElement | null)[]>([]);
-
-  // Cache instantâneo de unidades (carrega na hora do localStorage em 0ms)
+  // Cache de unidades cadastradas
   const [unidadesCadastradas, setUnidadesCadastradas] = useState<any[]>(() => {
     try {
       const salvos = localStorage.getItem('hubwash_lava_jatos');
       if (salvos) {
         const lista = JSON.parse(salvos);
         if (Array.isArray(lista) && lista.length > 0) {
-          const limpos = lista.filter((u: any) => u && u.id !== 'alef-jato' && !String(u.nomeFantasia || '').toLowerCase().includes('alef'));
+          const limpos = lista.filter(
+            (u: any) => u && u.id !== 'alef-jato' && !String(u.nomeFantasia || '').toLowerCase().includes('alef')
+          );
           try {
             localStorage.setItem('hubwash_lava_jatos', JSON.stringify(limpos));
           } catch {}
@@ -55,307 +139,410 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
     ];
   });
 
-  // Atualização suave em segundo plano via onSnapshot do Firestore (não bloqueia a tela)
+  // Escuta unidades em tempo real do Firestore respeitando permissões do UID autenticado
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
-    let unsubSeguranca: (() => void) | null = null;
 
     if (db) {
       try {
-        // Escuta alteração em tempo real do PIN Master na nuvem
-        unsubSeguranca = onSnapshot(doc(db, 'configuracoes', 'seguranca'), (snap) => {
-          if (snap.exists() && snap.data()?.masterPin) {
-            const pinNuven = String(snap.data().masterPin).trim();
-            setSenhaMaster(pinNuven);
-            try {
-              localStorage.setItem('hubwash_master_pin', pinNuven);
-            } catch {}
-          }
-        }, () => {});
+        const ehNaoMasterComPerfil = Boolean(
+          firebaseUser &&
+          perfilUsuario &&
+          perfilUsuario.role !== 'master' &&
+          !(perfilUsuario.unidadesPermitidas || []).includes('*')
+        );
 
-        unsubscribe = onSnapshot(collection(db, 'unidades'), (snap) => {
-          if (!snap.empty) {
-            const doFirestore: any[] = [];
-            snap.forEach((docSnap) => {
-              const dados = docSnap.data();
-              if (docSnap.id === 'alef-jato' || String(dados?.nomeFantasia || '').toLowerCase().includes('alef')) {
-                deleteDoc(doc(db, 'unidades', docSnap.id)).catch(() => {});
-                return;
+        const permitidasLista = (perfilUsuario?.unidadesPermitidas || [perfilUsuario?.unidadeId || 'pitstop'])
+          .filter((u): u is string => Boolean(u) && u !== '*' && u !== 'master')
+          .slice(0, 10);
+
+        const refUnidades = ehNaoMasterComPerfil && permitidasLista.length > 0
+          ? query(
+              collection(db, 'unidades'),
+              permitidasLista.length === 1
+                ? where('id', '==', permitidasLista[0])
+                : where('id', 'in', permitidasLista)
+            )
+          : collection(db, 'unidades');
+
+        unsubscribe = onSnapshot(
+          refUnidades,
+          (snap: any) => {
+            if (!snap.empty) {
+              const doFirestore: any[] = [];
+              snap.forEach((docSnap: any) => {
+                const dados = docSnap.data();
+                if (docSnap.id === 'alef-jato' || String(dados?.nomeFantasia || '').toLowerCase().includes('alef')) {
+                  return;
+                }
+                doFirestore.push({ id: docSnap.id, ...dados });
+              });
+              if (doFirestore.length > 0) {
+                setUnidadesCadastradas(doFirestore);
+                setUnidadeSelecionadaId((atual) =>
+                  doFirestore.some((u) => u.id === atual) ? atual : doFirestore[0].id
+                );
+                try {
+                  localStorage.setItem('hubwash_lava_jatos', JSON.stringify(doFirestore));
+                } catch {}
               }
-              doFirestore.push({ id: docSnap.id, ...dados });
-            });
-            if (doFirestore.length > 0) {
-              setUnidadesCadastradas(doFirestore);
-              try {
-                localStorage.setItem('hubwash_lava_jatos', JSON.stringify(doFirestore));
-              } catch {}
             }
+          },
+          (err: any) => {
+            console.warn('Listener Firestore unidades (Login):', err);
           }
-        }, (err) => {
-          console.warn('Listener Firestore unidades (Login):', err);
-        });
+        );
       } catch (e) {
         console.warn('Erro ao configurar onSnapshot no login:', e);
       }
     } else {
-      // Fallback API servidor em segundo plano
-      buscarUnidadesServidor().then((doServidor) => {
-        if (Array.isArray(doServidor) && doServidor.length > 0) {
-          setUnidadesCadastradas(doServidor);
-          try {
-            localStorage.setItem('hubwash_lava_jatos', JSON.stringify(doServidor));
-          } catch {}
-        }
-      }).catch(() => {});
+      buscarUnidadesServidor()
+        .then((doServidor) => {
+          if (Array.isArray(doServidor) && doServidor.length > 0) {
+            setUnidadesCadastradas(doServidor);
+          }
+        })
+        .catch(() => {});
     }
 
     return () => {
       if (unsubscribe) unsubscribe();
-      if (unsubSeguranca) unsubSeguranca();
     };
-  }, []);
+  }, [firebaseUser?.uid, perfilUsuario?.role, perfilUsuario?.unidadesPermitidas?.join(',')]);
 
-  // Focus first input on mount
-  useEffect(() => {
-    if (!isSuccess && inputsRef.current[0]) {
-      inputsRef.current[0].focus();
-    }
-  }, [isSuccess]);
+  const concluirAcessoComPerfil = (
+    perfil: UsuarioSistema,
+    roleAlvo: 'master' | 'lavajato',
+    unidadeIdAlvo?: string,
+    unidadeNomeAlvo?: string
+  ) => {
+    const uIdFinal = unidadeIdAlvo || perfil.unidadeId || 'pitstop';
+    const uNomeFinal = unidadeNomeAlvo || perfil.unidadeNome || 'Pit Stop Lava Jato';
 
-  const handleChange = (index: number, value: string) => {
-    // Permite caracteres alfanuméricos (letras e números)
-    const char = value.slice(-1);
-
-    const newOtp = [...otp];
-    newOtp[index] = char;
-    setOtp(newOtp);
-    setMessage({ text: '', type: '' });
-
-    if (char && index < 5) {
-      inputsRef.current[index + 1]?.focus();
-    }
-  };
-
-  const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace') {
-      if (!otp[index] && index > 0) {
-        const newOtp = [...otp];
-        newOtp[index - 1] = '';
-        setOtp(newOtp);
-        inputsRef.current[index - 1]?.focus();
-      } else {
-        const newOtp = [...otp];
-        newOtp[index] = '';
-        setOtp(newOtp);
-      }
-    } else if (e.key === 'ArrowLeft' && index > 0) {
-      inputsRef.current[index - 1]?.focus();
-    } else if (e.key === 'ArrowRight' && index < 5) {
-      inputsRef.current[index + 1]?.focus();
-    } else if (e.key === 'Enter') {
-      handleVerify();
-    }
-  };
-
-  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    const pastedData = e.clipboardData.getData('text').trim().slice(0, 6);
-    if (!pastedData) return;
-
-    const newOtp = [...otp];
-    for (let i = 0; i < 6; i++) {
-      newOtp[i] = pastedData[i] || '';
-    }
-    setOtp(newOtp);
-    setMessage({ text: '', type: '' });
-
-    const nextIndex = Math.min(pastedData.length, 5);
-    inputsRef.current[nextIndex]?.focus();
-  };
-
-  const handleVerify = async (senhaParam?: string) => {
-    const fullOtp = (typeof senhaParam === 'string' ? senhaParam : (modoTextoLivre ? senhaLivre : otp.join(''))).trim();
-
-    if (fullOtp.length < 4) {
-      setMessage({ text: 'Por favor, digite a sua senha de acesso.', type: 'error' });
-      return;
-    }
-
-    setIsVerifying(true);
-    setMessage({ text: 'Validando credenciais...', type: 'info' });
-
-    const fullOtpLower = fullOtp.toLowerCase();
-    const senhaMasterLower = (senhaMaster || '').toLowerCase();
-
-    // 1. Verificação instantânea da Senha Master (Segurança dinâmica + Suporte a 6 e 7 dígitos + Recuperação)
-    const isMasterMatch =
-      fullOtp === senhaMaster ||
-      fullOtpLower === senhaMasterLower ||
-      fullOtp === '124020' ||
-      fullOtpLower === 'nic124' ||
-      fullOtpLower === 'nic1240' ||
-      (senhaMaster.length > 6 && senhaMaster.startsWith(fullOtp)) ||
-      (senhaMasterLower.startsWith(fullOtpLower) && fullOtpLower.length >= 6);
-
-    if (isMasterMatch) {
-      setIsVerifying(false);
-      setIsSuccess(true);
-      try {
-        const pinNormalizado = fullOtpLower === 'nic1240' ? 'nic124' : fullOtp.slice(0, 6);
-        localStorage.setItem('hubwash_master_pin', pinNormalizado);
-        localStorage.setItem('hubwash_operador_sessao', JSON.stringify({
-          role: 'master',
-          unidadeNome: 'HubWash Master',
+    try {
+      localStorage.setItem(
+        'hubwash_operador_sessao',
+        JSON.stringify({
+          uid: perfil.uid,
+          email: perfil.email,
+          nome: perfil.nome,
+          role: roleAlvo,
+          unidadeId: roleAlvo === 'master' ? 'master' : uIdFinal,
+          unidadeNome: roleAlvo === 'master' ? 'HubWash Master' : uNomeFinal,
+          unidadesPermitidas: perfil.unidadesPermitidas,
           timestamp: Date.now()
-        }));
-      } catch {}
-      setTimeout(() => {
-        onSuccess('master');
-      }, 100);
-      return;
-    }
+        })
+      );
+    } catch {}
 
-    let unidadeEncontrada: any = null;
+    setIsSuccess(true);
+    setTimeout(() => {
+      onSuccess(roleAlvo, roleAlvo === 'master' ? 'HubWash Master' : uNomeFinal, undefined, perfil);
+    }, 150);
+  };
 
-    // 2. Verificação INSTANTÂNEA no cache local em memória e storage (0ms de espera)
-    unidadeEncontrada = unidadesCadastradas.find((u: any) => {
-      const senhaSalva = String(u.senhaProvisoria || '').trim();
-      return senhaSalva === fullOtp || senhaSalva.toLowerCase() === fullOtpLower;
+  // Observa estado do Firebase Authentication e resolve permissões por UID no Firestore
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      setFirebaseUser(user);
+      setCarregandoAuth(false);
+
+      if (!user) {
+        setPerfilUsuario(null);
+        setResolvendoPerfil(false);
+        return;
+      }
+
+      setResolvendoPerfil(true);
+      setMessage({ text: '', type: '' });
+
+      try {
+        const userDocRef = doc(db, 'usuarios', user.uid);
+        let snap;
+        try {
+          snap = await getDoc(userDocRef);
+        } catch (err: any) {
+          if (String(err?.code || '').includes('permission-denied')) {
+            handleFirestoreError(err, OperationType.GET, `usuarios/${user.uid}`);
+          }
+          throw err;
+        }
+
+        if (snap.exists()) {
+          const dados = snap.data() as UsuarioSistema;
+          const perfil: UsuarioSistema = {
+            ...dados,
+            uid: user.uid,
+            email: dados.email || user.email || '',
+            nome: dados.nome || user.displayName || user.email?.split('@')[0] || 'Operador',
+            unidadesPermitidas: Array.isArray(dados.unidadesPermitidas) && dados.unidadesPermitidas.length > 0
+              ? dados.unidadesPermitidas
+              : [dados.unidadeId || 'pitstop'],
+            ativo: dados.ativo !== false
+          };
+          setPerfilUsuario(perfil);
+
+          if (!perfil.ativo) {
+            setMessage({
+              text: 'Seu acesso está desativado pelo administrador. Entre em contato com o suporte.',
+              type: 'error'
+            });
+            setResolvendoPerfil(false);
+            return;
+          }
+
+          if (perfil.role === 'master') {
+            concluirAcessoComPerfil(perfil, 'master');
+            return;
+          }
+
+          // Verifica permissões por unidade para operadores de lava-jato usando leitura direta das unidades permitidas
+          const permitidas = perfil.unidadesPermitidas.filter((id) => Boolean(id) && id !== 'master' && id !== '*');
+          let listaUnidades = unidadesCadastradas;
+          if (permitidas.length > 0) {
+            try {
+              const snapsPermitidas = await Promise.all(
+                permitidas.slice(0, 10).map((uId) => getDoc(doc(db, 'unidades', uId)).catch(() => null))
+              );
+              const carregadas = snapsPermitidas
+                .filter((s): s is any => Boolean(s && s.exists()))
+                .map((s) => ({ id: s.id, ...s.data() }));
+              if (carregadas.length > 0) listaUnidades = carregadas;
+            } catch {}
+          }
+          if (permitidas.length === 1) {
+            const unidadeInfo = listaUnidades.find((u) => u.id === permitidas[0]);
+            if (unidadeInfo?.statusPlano === 'bloqueado') {
+              setMessage({
+                text: `Acesso bloqueado para a unidade "${unidadeInfo.nomeFantasia}". Entre em contato com o suporte SaaS.`,
+                type: 'error'
+              });
+              setResolvendoPerfil(false);
+              return;
+            }
+            concluirAcessoComPerfil(
+              perfil,
+              'lavajato',
+              permitidas[0],
+              unidadeInfo?.nomeFantasia || perfil.unidadeNome
+            );
+            return;
+          }
+
+          setResolvendoPerfil(false);
+          return;
+        }
+
+        // Primeiro acesso deste UID: bootstrap automático para o e-mail Master verificado
+        if (user.email?.toLowerCase() === BOOTSTRAP_MASTER_EMAIL && user.emailVerified) {
+          const novoMaster: UsuarioSistema = {
+            uid: user.uid,
+            email: user.email,
+            nome: user.displayName || 'Super Admin',
+            ...(user.photoURL ? { fotoUrl: user.photoURL } : {}),
+            role: 'master',
+            unidadeId: 'master',
+            unidadeNome: 'HubWash Master',
+            unidadesPermitidas: ['*'],
+            ativo: true,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          try {
+            await setDoc(userDocRef, sanitizarParaFirestore(novoMaster));
+          } catch (err: any) {
+            if (String(err?.code || '').includes('permission-denied')) {
+              handleFirestoreError(err, OperationType.CREATE, `usuarios/${user.uid}`);
+            }
+            throw err;
+          }
+          setPerfilUsuario(novoMaster);
+          concluirAcessoComPerfil(novoMaster, 'master');
+          return;
+        }
+
+        // Novo usuário: aguarda vinculação à unidade
+        setPerfilUsuario(null);
+        setResolvendoPerfil(false);
+      } catch (err: any) {
+        console.error('Erro ao resolver perfil Firebase Auth:', err);
+        setMessage({
+          text: err?.message || 'Erro ao carregar permissões da conta.',
+          type: 'error'
+        });
+        setResolvendoPerfil(false);
+      }
     });
 
-    if (!unidadeEncontrada) {
-      try {
-        const salvos = localStorage.getItem('hubwash_lava_jatos');
-        if (salvos) {
-          const lista = JSON.parse(salvos);
-          if (Array.isArray(lista)) {
-            unidadeEncontrada = lista.find((u: any) => {
-              const senhaSalva = String(u.senhaProvisoria || '').trim();
-              return senhaSalva === fullOtp || senhaSalva.toLowerCase() === fullOtpLower;
-            });
-          }
-        }
-      } catch {}
-    }
+    return () => unsubAuth();
+  }, []);
 
-    // 3. Senha padrão de teste do Pit Stop caso não haja banco carregado
-    if (!unidadeEncontrada && fullOtpLower === 'pit123') {
-      unidadeEncontrada = {
-        id: 'pitstop',
-        nomeFantasia: 'Pit Stop Lava Jato',
-        statusPlano: 'ativo'
-      };
-    }
-
-    // Se encontrou no cache ou padrão, ENTRA IMEDIATAMENTE (0ms) sem travar a rede
-    if (unidadeEncontrada) {
-      if (unidadeEncontrada.statusPlano === 'bloqueado') {
-        setIsVerifying(false);
-        setMessage({
-          text: `Acesso bloqueado para "${unidadeEncontrada.nomeFantasia}". Entre em contato com o suporte SaaS.`,
-          type: 'error'
-        });
-        setOtp(['', '', '', '', '', '']);
-        inputsRef.current[0]?.focus();
-        return;
-      }
-
-      setIsVerifying(false);
-      setIsSuccess(true);
-      try {
-        localStorage.setItem('hubwash_operador_sessao', JSON.stringify({
-          role: 'lavajato',
-          unidadeNome: unidadeEncontrada.nomeFantasia,
-          unidadeId: unidadeEncontrada.id,
-          timestamp: Date.now()
-        }));
-      } catch {}
-
-      setTimeout(() => {
-        onSuccess('lavajato', unidadeEncontrada.nomeFantasia);
-      }, 100);
-      return;
-    }
-
-    // 4. Se não achou localmente, busca no Firestore / Servidor com timeout estrito de 1.2s (nunca 60s)
+  const handleLoginGoogle = async () => {
+    setEnviandoAuth(true);
+    setMessage({ text: '', type: '' });
     try {
-      if (db) {
-        try {
-          const snap = await Promise.race([
-            getDocs(collection(db, 'unidades')),
-            new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 1200))
-          ]);
-          if (snap && 'forEach' in snap) {
-            snap.forEach((docSnap: any) => {
-              const data = docSnap.data();
-              const senhaSalva = String(data.senhaProvisoria || '').trim();
-              if (senhaSalva && (senhaSalva === fullOtp || senhaSalva.toLowerCase() === fullOtpLower)) {
-                unidadeEncontrada = { id: docSnap.id, ...data };
-              }
-            });
-          }
-        } catch {}
-      }
-
-      if (!unidadeEncontrada) {
-        try {
-          const doServidor = await Promise.race([
-            buscarUnidadesServidor(),
-            new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
-          ]);
-          if (Array.isArray(doServidor) && doServidor.length > 0) {
-            unidadeEncontrada = doServidor.find((u: any) => {
-              const senhaSalva = String(u.senhaProvisoria || '').trim();
-              return senhaSalva === fullOtp || senhaSalva.toLowerCase() === fullOtpLower;
-            });
-          }
-        } catch {}
-      }
-    } catch (e) {
-      console.error(e);
-    }
-
-    if (unidadeEncontrada) {
-      if (unidadeEncontrada.statusPlano === 'bloqueado') {
-        setIsVerifying(false);
-        setMessage({
-          text: `Acesso bloqueado para "${unidadeEncontrada.nomeFantasia}". Entre em contato com o suporte SaaS.`,
-          type: 'error'
-        });
-        setOtp(['', '', '', '', '', '']);
-        inputsRef.current[0]?.focus();
-        return;
-      }
-
-      setIsVerifying(false);
-      setIsSuccess(true);
-      try {
-        localStorage.setItem('hubwash_operador_sessao', JSON.stringify({
-          role: 'lavajato',
-          unidadeNome: unidadeEncontrada.nomeFantasia,
-          unidadeId: unidadeEncontrada.id,
-          timestamp: Date.now()
-        }));
-      } catch {}
-
-      setTimeout(() => {
-        onSuccess('lavajato', unidadeEncontrada.nomeFantasia);
-      }, 100);
-    } else {
-      setIsVerifying(false);
-      setMessage({
-        text: 'Senha incorreta ou não encontrada! Verifique o código e tente novamente.',
-        type: 'error'
-      });
-      setOtp(['', '', '', '', '', '']);
-      inputsRef.current[0]?.focus();
+      await signInWithPopup(auth, googleProvider);
+    } catch (err: any) {
+      setMessage({ text: traduzirErroFirebaseAuth(err), type: 'error' });
+    } finally {
+      setEnviandoAuth(false);
     }
   };
 
-  const preencherSenha = (senha: string) => {
-    const chars = senha.split('').slice(0, 6);
-    setOtp(chars);
+  const handleAuthEmailSenha = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const emailLimpo = emailInput.trim();
+    const senhaLimpa = senhaInput.trim();
+
+    if (!emailLimpo || !senhaLimpa) {
+      setMessage({ text: 'Preencha o e-mail e a senha para continuar.', type: 'error' });
+      return;
+    }
+
+    if (modoAuth === 'cadastrar' && senhaLimpa.length < 6) {
+      setMessage({ text: 'A senha deve conter no mínimo 6 caracteres.', type: 'error' });
+      return;
+    }
+
+    setEnviandoAuth(true);
     setMessage({ text: '', type: '' });
+
+    try {
+      if (modoAuth === 'cadastrar') {
+        const cred = await createUserWithEmailAndPassword(auth, emailLimpo, senhaLimpa);
+        if (nomeCadastro.trim()) {
+          await updateProfile(cred.user, { displayName: nomeCadastro.trim() }).catch(() => {});
+        }
+      } else {
+        await signInWithEmailAndPassword(auth, emailLimpo, senhaLimpa);
+      }
+    } catch (err: any) {
+      setMessage({ text: traduzirErroFirebaseAuth(err), type: 'error' });
+    } finally {
+      setEnviandoAuth(false);
+    }
+  };
+
+  const handleRecuperarSenha = async () => {
+    const emailLimpo = emailInput.trim();
+    if (!emailLimpo) {
+      setMessage({ text: 'Digite seu e-mail acima para receber o link de redefinição de senha.', type: 'info' });
+      return;
+    }
+    setEnviandoAuth(true);
+    try {
+      await sendPasswordResetEmail(auth, emailLimpo);
+      setMessage({ text: `E-mail de redefinição enviado para ${emailLimpo}. Verifique sua caixa de entrada.`, type: 'success' });
+    } catch (err: any) {
+      setMessage({ text: traduzirErroFirebaseAuth(err), type: 'error' });
+    } finally {
+      setEnviandoAuth(false);
+    }
+  };
+
+  const handleVincularUnidade = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firebaseUser || vinculandoUnidade) return;
+
+    const codigoDigitado = codigoUnidadeInput.trim();
+    if (!codigoDigitado) {
+      setMessage({ text: 'Informe o código de acesso da unidade fornecido pelo administrador.', type: 'error' });
+      return;
+    }
+
+    setVinculandoUnidade(true);
+    setMessage({ text: '', type: '' });
+
+    try {
+      // Busca lista atualizada do Firestore para validar o código da unidade
+      let unidadeAlvo = unidadesCadastradas.find((u) => u.id === unidadeSelecionadaId);
+      try {
+        const snapUnidade = await getDoc(doc(db, 'unidades', unidadeSelecionadaId));
+        if (snapUnidade.exists()) {
+          unidadeAlvo = { id: snapUnidade.id, ...snapUnidade.data() };
+        }
+      } catch {}
+
+      if (!unidadeAlvo) {
+        setMessage({ text: 'Unidade selecionada não encontrada.', type: 'error' });
+        setVinculandoUnidade(false);
+        return;
+      }
+
+      if (unidadeAlvo.statusPlano === 'bloqueado') {
+        setMessage({
+          text: `A unidade "${unidadeAlvo.nomeFantasia}" está bloqueada no momento. Contate o suporte.`,
+          type: 'error'
+        });
+        setVinculandoUnidade(false);
+        return;
+      }
+
+      const senhaEsperada = String(unidadeAlvo.senhaProvisoria || '').trim();
+      if (!senhaEsperada || codigoDigitado.toLowerCase() !== senhaEsperada.toLowerCase()) {
+        setMessage({
+          text: 'Código de vinculação da unidade incorreto. Confira com o responsável pelo lava-jato.',
+          type: 'error'
+        });
+        setVinculandoUnidade(false);
+        return;
+      }
+
+      const novoPerfil: UsuarioSistema = {
+        uid: firebaseUser.uid,
+        email: firebaseUser.email || emailInput.trim() || `${firebaseUser.uid}@hubwash.app`,
+        nome: firebaseUser.displayName || nomeCadastro.trim() || firebaseUser.email?.split('@')[0] || 'Operador',
+        ...(firebaseUser.photoURL ? { fotoUrl: firebaseUser.photoURL } : {}),
+        role: 'lavajato',
+        unidadeId: unidadeAlvo.id,
+        unidadeNome: unidadeAlvo.nomeFantasia,
+        unidadesPermitidas: [unidadeAlvo.id],
+        ativo: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      try {
+        await setDoc(doc(db, 'usuarios', firebaseUser.uid), sanitizarParaFirestore(novoPerfil));
+      } catch (err: any) {
+        if (String(err?.code || '').includes('permission-denied')) {
+          handleFirestoreError(err, OperationType.CREATE, `usuarios/${firebaseUser.uid}`);
+        }
+        throw err;
+      }
+
+      // Vincula UID na unidade correspondente (best-effort)
+      try {
+        await updateDoc(doc(db, 'unidades', unidadeAlvo.id), {
+          usuariosAutorizados: arrayUnion(firebaseUser.uid)
+        });
+      } catch {}
+
+      setPerfilUsuario(novoPerfil);
+      concluirAcessoComPerfil(novoPerfil, 'lavajato', unidadeAlvo.id, unidadeAlvo.nomeFantasia);
+    } catch (err: any) {
+      setMessage({ text: err?.message || 'Não foi possível vincular sua conta à unidade.', type: 'error' });
+    } finally {
+      setVinculandoUnidade(false);
+    }
+  };
+
+  const handleTrocarConta = async () => {
+    try {
+      localStorage.removeItem('hubwash_operador_sessao');
+    } catch {}
+    setMessage({ text: '', type: '' });
+    setCodigoUnidadeInput('');
+    await signOut(auth);
+  };
+
+  const handleCopiarUid = () => {
+    if (!firebaseUser?.uid) return;
+    try {
+      navigator.clipboard.writeText(firebaseUser.uid);
+      setUidCopiado(true);
+      setTimeout(() => setUidCopiado(false), 2000);
+    } catch {}
   };
 
   const getPrimeiraUnidade = () => {
@@ -374,9 +561,25 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
   return (
     <div className="otp-wrapper">
       <div className="otp-card">
-        {!isSuccess ? (
-          <div id="otpForm">
-            <div className="flex justify-center mb-3">
+        {isSuccess ? (
+          <div className="success-screen" id="successScreen">
+            <div className="success-icon">✓</div>
+            <h2>Acesso Autorizado</h2>
+            <p>
+              Identidade validada com sucesso!
+              <br />
+              Redirecionando para sua unidade...
+            </p>
+          </div>
+        ) : carregandoAuth || resolvendoPerfil ? (
+          <div className="py-10 flex flex-col items-center justify-center space-y-3 text-center">
+            <RefreshCw className="w-8 h-8 text-blue-400 animate-spin" />
+            <p className="text-sm font-bold text-white">Autenticando acesso...</p>
+            <p className="text-xs text-slate-400">Verificando permissões por unidade</p>
+          </div>
+        ) : !firebaseUser ? (
+          <div id="otpForm" className="space-y-4">
+            <div className="flex justify-center mb-2">
               <img
                 src="/logo.png"
                 alt="Logo HubWash"
@@ -390,84 +593,149 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
                     target.style.display = 'none';
                   }
                 }}
-                className="h-16 w-auto max-w-[220px] object-contain drop-shadow-md"
+                className="h-14 w-auto max-w-[200px] object-contain drop-shadow-md"
               />
             </div>
-            <h1>Terminal de Acesso</h1>
-            <p className="description">
-              Por favor, autentique para continuar
-            </p>
 
-            {!modoTextoLivre ? (
-              <div className="otp-inputs" id="otpInputs">
-                {otp.map((digit, index) => (
-                  <input
-                    key={index}
-                    ref={(el) => {
-                      inputsRef.current[index] = el;
-                    }}
-                    className={`otp-input ${digit ? 'filled' : ''}`}
-                    type="password"
-                    inputMode="text"
-                    maxLength={1}
-                    autoComplete={index === 0 ? 'one-time-code' : 'off'}
-                    value={digit}
-                    onChange={(e) => handleChange(index, e.target.value)}
-                    onKeyDown={(e) => handleKeyDown(index, e)}
-                    onPaste={handlePaste}
-                    disabled={isVerifying}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="mb-3">
-                <input
-                  type="password"
-                  className="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl px-4 py-3 text-center text-lg tracking-wider text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500 transition font-mono"
-                  placeholder="Digite sua senha (ex: nic124, 124020)"
-                  value={senhaLivre}
-                  onChange={(e) => setSenhaLivre(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleVerify();
-                  }}
-                  autoFocus
-                />
-              </div>
-            )}
+            <div>
+              <h1>Terminal de Acesso</h1>
+              <p className="description flex items-center justify-center gap-1.5">
+                <ShieldCheck size={14} className="text-emerald-400" />
+                <span>Autenticação segura</span>
+              </p>
+            </div>
 
-            <div className="flex justify-center -mt-1 mb-4">
+            {/* Botão Principal: Entrar com Google */}
+            <button
+              type="button"
+              onClick={handleLoginGoogle}
+              disabled={enviandoAuth}
+              className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-900 font-bold text-xs shadow-lg transition cursor-pointer flex items-center justify-center gap-2.5"
+            >
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z" />
+                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z" />
+                <path fill="#FBBC05" d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z" />
+                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z" />
+              </svg>
+              <span>{enviandoAuth ? 'Conectando...' : 'Entrar com Google'}</span>
+            </button>
+
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500">
+              <div className="flex-1 h-px bg-slate-800" />
+              <span>ou use e-mail e senha</span>
+              <div className="flex-1 h-px bg-slate-800" />
+            </div>
+
+            {/* Alternador Entrar / Cadastrar */}
+            <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs font-bold">
               <button
                 type="button"
                 onClick={() => {
-                  setModoTextoLivre(!modoTextoLivre);
+                  setModoAuth('entrar');
                   setMessage({ text: '', type: '' });
                 }}
-                className="text-[11px] text-blue-400 hover:text-blue-300 transition underline cursor-pointer"
+                className={`py-1.5 rounded-lg transition cursor-pointer ${
+                  modoAuth === 'entrar' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                }`}
               >
-                {modoTextoLivre ? 'Alternar para 6 campos individuais (OTP)' : 'Senha com tamanho livre? Alternar modo de digitação'}
+                Entrar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setModoAuth('cadastrar');
+                  setMessage({ text: '', type: '' });
+                }}
+                className={`py-1.5 rounded-lg transition cursor-pointer flex items-center justify-center gap-1 ${
+                  modoAuth === 'cadastrar' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <UserPlus size={12} />
+                <span>Criar Conta</span>
               </button>
             </div>
 
-            <button
-              className="verify-btn"
-              id="verifyBtn"
-              type="button"
-              onClick={() => handleVerify()}
-              disabled={isVerifying || (modoTextoLivre ? senhaLivre.trim().length === 0 : otp.join('').length < 6)}
-            >
-              {isVerifying ? 'Verificando...' : 'Acessar Sistema'}
-            </button>
+            <form onSubmit={handleAuthEmailSenha} className="space-y-2.5 text-left text-xs">
+              {modoAuth === 'cadastrar' && (
+                <div className="relative">
+                  <UserIcon className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    value={nomeCadastro}
+                    onChange={(e) => setNomeCadastro(e.target.value)}
+                    placeholder="Seu nome completo"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="relative">
+                <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="email"
+                  required
+                  value={emailInput}
+                  onChange={(e) => setEmailInput(e.target.value)}
+                  placeholder="seu@email.com"
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="password"
+                  required
+                  value={senhaInput}
+                  onChange={(e) => setSenhaInput(e.target.value)}
+                  placeholder="Senha (mín. 6 caracteres)"
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl pl-9 pr-3 py-2.5 text-white placeholder-slate-500 focus:outline-none"
+                />
+              </div>
+
+              {modoAuth === 'entrar' && (
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleRecuperarSenha}
+                    className="text-[11px] text-blue-400 hover:text-blue-300 underline cursor-pointer"
+                  >
+                    Esqueci minha senha
+                  </button>
+                </div>
+              )}
+
+              <button
+                className="verify-btn"
+                id="verifyBtn"
+                type="submit"
+                disabled={enviandoAuth}
+              >
+                {enviandoAuth
+                  ? 'Autenticando...'
+                  : modoAuth === 'cadastrar'
+                  ? 'Criar Conta'
+                  : 'Acessar Sistema'}
+              </button>
+            </form>
 
             {message.text && (
               <div
-                className={`message ${message.type === 'error' ? 'error' : message.type === 'info' ? 'info' : ''}`}
+                className={`message ${
+                  message.type === 'error'
+                    ? 'error'
+                    : message.type === 'info'
+                    ? 'info'
+                    : 'text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-2.5 text-xs'
+                }`}
                 id="message"
               >
                 {message.text}
               </div>
             )}
 
-            <div className="mt-6 pt-5 border-t border-slate-800 space-y-2.5 text-center">
+            <div className="pt-4 border-t border-slate-800 space-y-2 text-center">
               <button
                 type="button"
                 onClick={() => onSuccess('cliente', getPrimeiraUnidade(), 'login')}
@@ -479,14 +747,150 @@ export default function LoginOTP({ onSuccess, defaultRole = 'master' }: LoginOTP
             </div>
           </div>
         ) : (
-          <div className="success-screen" id="successScreen">
-            <div className="success-icon">✓</div>
-            <h2>Acesso Autorizado</h2>
-            <p>
-              Credencial verificada com sucesso!
-              <br />
-              Redirecionando...
-            </p>
+          /* USUÁRIO AUTENTICADO COM FIREBASE UID -> SELEÇÃO OU VINCULAÇÃO À UNIDADE */
+          <div className="space-y-4 text-left">
+            <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-400 flex items-center justify-center font-bold text-sm shrink-0">
+                  {(firebaseUser.displayName || firebaseUser.email || 'U').charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-white truncate">
+                    {firebaseUser.displayName || firebaseUser.email}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleCopiarUid}
+                    className="text-[10px] font-mono text-cyan-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer"
+                    title="Clique para copiar seu UID exclusivo do Firebase"
+                  >
+                    <span>UID: {firebaseUser.uid.slice(0, 12)}...</span>
+                    {uidCopiado ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleTrocarConta}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                title="Sair e trocar de conta"
+              >
+                <LogOut size={12} />
+                <span>Sair</span>
+              </button>
+            </div>
+
+            {perfilUsuario && !perfilUsuario.ativo ? (
+              <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-center space-y-2">
+                <AlertTriangle className="w-8 h-8 text-rose-400 mx-auto" />
+                <p className="text-xs font-bold text-white">Acesso Suspenso</p>
+                <p className="text-[11px] text-slate-300">
+                  O acesso para o UID <span className="font-mono text-rose-300">{firebaseUser.uid}</span> foi desativado pelo administrador.
+                </p>
+              </div>
+            ) : perfilUsuario && perfilUsuario.unidadesPermitidas.length > 1 ? (
+              <div className="space-y-3">
+                <div className="space-y-0.5">
+                  <h2 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    <Building2 size={15} className="text-blue-400" />
+                    <span>Selecione sua Unidade Autorizada</span>
+                  </h2>
+                  <p className="text-[11px] text-slate-400">
+                    Seu UID possui permissão para acessar múltiplas unidades:
+                  </p>
+                </div>
+
+                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  {perfilUsuario.unidadesPermitidas.map((uId) => {
+                    const info = unidadesCadastradas.find((u) => u.id === uId);
+                    const nome = info?.nomeFantasia || uId;
+                    const bloqueado = info?.statusPlano === 'bloqueado';
+
+                    return (
+                      <button
+                        key={uId}
+                        type="button"
+                        disabled={bloqueado}
+                        onClick={() => concluirAcessoComPerfil(perfilUsuario, 'lavajato', uId, nome)}
+                        className="w-full p-3 rounded-xl bg-slate-950 hover:bg-slate-800/90 disabled:opacity-50 border border-slate-800 hover:border-blue-500/50 flex items-center justify-between transition cursor-pointer"
+                      >
+                        <div className="text-left">
+                          <p className="text-xs font-bold text-white">{nome}</p>
+                          <p className="text-[10px] font-mono text-slate-400">Unidade: {uId}</p>
+                        </div>
+                        {bloqueado ? (
+                          <span className="text-[10px] font-bold text-rose-400">Bloqueado</span>
+                        ) : (
+                          <CheckCircle2 size={16} className="text-emerald-400" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleVincularUnidade} className="space-y-3 text-xs">
+                <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-1">
+                  <p className="font-bold text-blue-300 flex items-center gap-1.5">
+                    <KeyRound size={14} />
+                    <span>Vincular Permissão por Unidade</span>
+                  </p>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Primeiro acesso detectado! Selecione o seu lava-jato e informe o código de acesso da unidade para vincular este UID permanentemente.
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-slate-300 font-semibold block">Unidade / Lava-Jato</label>
+                  <select
+                    value={unidadeSelecionadaId}
+                    onChange={(e) => setUnidadeSelecionadaId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl px-3 py-2.5 text-white focus:outline-none cursor-pointer"
+                  >
+                    {unidadesCadastradas.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.nomeFantasia} ({u.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-slate-300 font-semibold block">Código de Acesso da Unidade</label>
+                  <input
+                    type="password"
+                    required
+                    value={codigoUnidadeInput}
+                    onChange={(e) => setCodigoUnidadeInput(e.target.value)}
+                    placeholder="Código cadastrado na unidade (ex: pit123)"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none font-mono"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={vinculandoUnidade}
+                  className="verify-btn"
+                >
+                  {vinculandoUnidade ? 'Vinculando UID...' : 'Vincular e Acessar Unidade'}
+                </button>
+              </form>
+            )}
+
+            {message.text && (
+              <div
+                className={`message ${
+                  message.type === 'error'
+                    ? 'error'
+                    : message.type === 'info'
+                    ? 'info'
+                    : 'text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-2.5 text-xs'
+                }`}
+              >
+                {message.text}
+              </div>
+            )}
           </div>
         )}
       </div>

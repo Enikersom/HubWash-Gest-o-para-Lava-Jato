@@ -8,7 +8,9 @@
         "nome": { "type": "string", "maxLength": 150 },
         "email": { "type": "string", "maxLength": 150 },
         "senhaAcesso": { "type": "string", "maxLength": 100 },
+        "unidadeId": { "type": "string", "maxLength": 128 },
         "unidadeVinculadaId": { "type": "string", "maxLength": 100 },
+        "ownerUid": { "type": "string", "maxLength": 128 },
         "contato": { "type": "string", "maxLength": 50 },
         "cep": { "type": "string", "maxLength": 20 },
         "cidade": { "type": "string", "maxLength": 100 },
@@ -77,7 +79,8 @@
         "dataExpiracao": { "type": "string" },
         "statusPlano": { "type": "string", "enum": ["ativo", "teste", "vitalicio", "bloqueado"] },
         "tipoPlano": { "type": "string", "enum": ["mensal", "anual", "vitalicio"] },
-        "logoUrl": { "type": "string" }
+        "logoUrl": { "type": "string" },
+        "usuariosAutorizados": { "type": "array" }
       },
       "required": ["id", "nomeFantasia", "senhaProvisoria", "statusPlano"]
     },
@@ -210,6 +213,25 @@
         "atualizadoEm": { "type": "string" }
       },
       "required": ["token", "clienteId"]
+    },
+    "Usuario": {
+      "title": "Usuario",
+      "description": "Usuário autenticado via Firebase Auth (UID único) com permissões de acesso por unidade",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 200 },
+        "nome": { "type": "string", "maxLength": 150 },
+        "fotoUrl": { "type": "string", "maxLength": 1000 },
+        "role": { "type": "string", "enum": ["master", "lavajato", "cliente"] },
+        "unidadeId": { "type": "string", "maxLength": 128 },
+        "unidadeNome": { "type": "string", "maxLength": 150 },
+        "unidadesPermitidas": { "type": "array" },
+        "ativo": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "email", "nome", "role", "unidadeId", "unidadeNome", "unidadesPermitidas", "ativo"]
     }
   },
   "firestore": {
@@ -252,6 +274,10 @@
     "/dispositivos_fcm/{tokenId}": {
       "schema": { "$ref": "#/entities/DispositivoFCM" },
       "description": "Coleção de tokens FCM para notificações push"
+    },
+    "/usuarios/{userId}": {
+      "schema": { "$ref": "#/entities/Usuario" },
+      "description": "Coleção de usuários autenticados com UID único e permissões por unidade"
     }
   }
 }

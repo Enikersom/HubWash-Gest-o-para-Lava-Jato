@@ -60,7 +60,7 @@ import {
   MessageCircle,
   ExternalLink
 } from 'lucide-react';
-import { db, collection, addDoc, setDoc, onSnapshot, doc, updateDoc, deleteDoc, query, where, orderBy, getDocs, getFirebaseStatus, salvarFirebaseConfig } from '../firebase';
+import { db, collection, addDoc, setDoc, onSnapshot, doc, updateDoc, deleteDoc, query, where, orderBy, getDocs, getFirebaseStatus, salvarFirebaseConfig, handleFirestoreError, OperationType } from '../firebase';
 import { 
   buscarDadosSincronizados, 
   registrarClienteServidor, 
@@ -96,7 +96,8 @@ import {
   AgendamentoPWA,
   ServicoLavaJato,
   LavaJato,
-  VendaPDV
+  VendaPDV,
+  UsuarioSistema
 } from '../types';
 import RelatorioFinanceiro from './RelatorioFinanceiro';
 import SistemaChecklist from './SistemaChecklist';
@@ -107,12 +108,14 @@ import { formatarCelular, formatarCEP, deduplicarBanners, sanitizarParaFirestore
 interface PainelLavaJatoProps {
   unidadeNome?: string;
   abrirPDVDireto?: boolean;
+  usuarioAuth?: UsuarioSistema | null;
   onLogout: () => void;
 }
 
 export default function PainelLavaJato({
   unidadeNome = 'Pit Stop Lava Jato',
   abrirPDVDireto = false,
+  usuarioAuth,
   onLogout
 }: PainelLavaJatoProps) {
   // CONFIGURAÇÃO DO MENU LATERAL RECOLHÍVEL
@@ -152,8 +155,12 @@ export default function PainelLavaJato({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [paginaPDVAberta]);
 
-  // Identificação e isolamento multi-inquilino exclusivo da Unidade
+  // Identificação e isolamento multi-inquilino exclusivo da Unidade (priorizando o UID autenticado)
   const unidadeSlugSanitizada = useMemo(() => {
+    if (usuarioAuth?.role === 'lavajato' && usuarioAuth?.unidadeId && usuarioAuth.unidadeId !== 'master') {
+      return String(usuarioAuth.unidadeId).toLowerCase().trim();
+    }
+
     try {
       const salvos = localStorage.getItem('hubwash_lava_jatos');
       if (salvos) {
@@ -177,9 +184,35 @@ export default function PainelLavaJato({
       .replace(/[^a-z0-9]/g, '-')
       .replace(/-+/g, '-')
       .replace(/^-|-$/g, '') || 'pitstop';
-  }, [unidadeNome]);
+  }, [unidadeNome, usuarioAuth]);
 
   const unidadeLogada = unidadeSlugSanitizada;
+
+  const isMasterUsuario = Boolean(
+    usuarioAuth?.role === 'master' || (usuarioAuth?.unidadesPermitidas || []).includes('*')
+  );
+
+  // Lista exata de IDs autorizados no perfil /usuarios/{uid} para satisfazer as Security Rules por UID
+  const unidadesPermitidasQuery = useMemo(() => {
+    if (isMasterUsuario) return null;
+    const permitidas = (usuarioAuth?.unidadesPermitidas || [])
+      .concat(usuarioAuth?.unidadeId ? [usuarioAuth.unidadeId] : [])
+      .map((u) => String(u || '').trim())
+      .filter((u) => Boolean(u) && u !== 'master' && u !== '*');
+    const unicas = Array.from(new Set(permitidas)).slice(0, 10);
+    return unicas.length > 0 ? unicas : [unidadeLogada];
+  }, [isMasterUsuario, usuarioAuth, unidadeLogada]);
+
+  const criarQueryUnidade = (nomeColecao: string, ...extraConstraints: any[]) => {
+    if (!unidadesPermitidasQuery || unidadesPermitidasQuery.length === 0) {
+      return query(collection(db, nomeColecao), ...extraConstraints);
+    }
+    const filtroUnidade =
+      unidadesPermitidasQuery.length === 1
+        ? where('unidadeId', '==', unidadesPermitidasQuery[0])
+        : where('unidadeId', 'in', unidadesPermitidasQuery);
+    return query(collection(db, nomeColecao), filtroUnidade, ...extraConstraints);
+  };
 
   const isPitStop = useMemo(() => {
     const slug = (unidadeSlugSanitizada || '').toLowerCase();
@@ -837,7 +870,7 @@ export default function PainelLavaJato({
       if (db) {
         try {
           const snap: any = await Promise.race([
-            getDocs(collection(db, 'agendamentos')),
+            getDocs(criarQueryUnidade('agendamentos')),
             new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))
           ]);
           if (snap && 'forEach' in snap) {
@@ -1192,7 +1225,7 @@ export default function PainelLavaJato({
 
     if (db) {
       try {
-        const qClientes = query(collection(db, 'clientes'));
+        const qClientes = criarQueryUnidade('clientes');
         unsubClientes = onSnapshot(
           qClientes,
           (snapshot: any) => {
@@ -1236,11 +1269,15 @@ export default function PainelLavaJato({
             });
           },
           (error: any) => {
-            console.warn('Firestore onSnapshot clientes (Painel):', error);
+            if (String(error?.code || '').includes('permission-denied')) {
+              try { handleFirestoreError(error, OperationType.LIST, 'clientes'); } catch {}
+            } else {
+              console.warn('Firestore onSnapshot clientes (Painel):', error);
+            }
           }
         );
 
-        const qAgendamentos = query(collection(db, 'agendamentos'));
+        const qAgendamentos = criarQueryUnidade('agendamentos');
         unsubAgendamentos = onSnapshot(
           qAgendamentos,
           (snapshot: any) => {
@@ -1316,11 +1353,15 @@ export default function PainelLavaJato({
             firestoreAgendamentoIdsRef.current = novosIdsFirestore;
           },
           (error: any) => {
-            console.warn('Firestore onSnapshot agendamentos (Painel):', error);
+            if (String(error?.code || '').includes('permission-denied')) {
+              try { handleFirestoreError(error, OperationType.LIST, 'agendamentos'); } catch {}
+            } else {
+              console.warn('Firestore onSnapshot agendamentos (Painel):', error);
+            }
           }
         );
 
-        const qBanners = query(collection(db, 'banners'));
+        const qBanners = criarQueryUnidade('banners');
         unsubBanners = onSnapshot(
           qBanners,
           (snapshot: any) => {
@@ -1356,11 +1397,15 @@ export default function PainelLavaJato({
             }
           },
           (error: any) => {
-            console.warn('Firestore onSnapshot banners (Painel):', error);
+            if (String(error?.code || '').includes('permission-denied')) {
+              try { handleFirestoreError(error, OperationType.LIST, 'banners'); } catch {}
+            } else {
+              console.warn('Firestore onSnapshot banners (Painel):', error);
+            }
           }
         );
 
-        const qServicos = query(collection(db, 'servicos'));
+        const qServicos = criarQueryUnidade('servicos');
         unsubServicos = onSnapshot(
           qServicos,
           (snapshot: any) => {
@@ -1401,11 +1446,15 @@ export default function PainelLavaJato({
             }
           },
           (error: any) => {
-            console.warn('Firestore onSnapshot servicos (Painel):', error);
+            if (String(error?.code || '').includes('permission-denied')) {
+              try { handleFirestoreError(error, OperationType.LIST, 'servicos'); } catch {}
+            } else {
+              console.warn('Firestore onSnapshot servicos (Painel):', error);
+            }
           }
         );
 
-        const qProdutos = query(collection(db, 'produtos'));
+        const qProdutos = criarQueryUnidade('produtos');
         unsubProdutos = onSnapshot(
           qProdutos,
           (snapshot: any) => {
@@ -1453,11 +1502,15 @@ export default function PainelLavaJato({
             }
           },
           (error: any) => {
-            console.warn('Firestore onSnapshot produtos (Painel):', error);
+            if (String(error?.code || '').includes('permission-denied')) {
+              try { handleFirestoreError(error, OperationType.LIST, 'produtos'); } catch {}
+            } else {
+              console.warn('Firestore onSnapshot produtos (Painel):', error);
+            }
           }
         );
 
-        const qVendas = query(collection(db, 'vendas'));
+        const qVendas = criarQueryUnidade('vendas');
         unsubVendas = onSnapshot(
           qVendas,
           (snapshot: any) => {
@@ -1510,7 +1563,11 @@ export default function PainelLavaJato({
             }
           },
           (error: any) => {
-            console.warn('Firestore onSnapshot vendas (Painel):', error);
+            if (String(error?.code || '').includes('permission-denied')) {
+              try { handleFirestoreError(error, OperationType.LIST, 'vendas'); } catch {}
+            } else {
+              console.warn('Firestore onSnapshot vendas (Painel):', error);
+            }
           }
         );
       } catch (err) {
@@ -1528,7 +1585,7 @@ export default function PainelLavaJato({
       if (unsubProdutos) unsubProdutos();
       if (unsubVendas) unsubVendas();
     };
-  }, [aliasesUnidade, unidadeLogada]);
+  }, [aliasesUnidade, unidadeLogada, unidadesPermitidasQuery]);
 
   // ==========================================
   // LOGICA: EXCLUSÃO CONFIRMADA (MODAL INTERNO)
@@ -1559,7 +1616,7 @@ export default function PainelLavaJato({
           await deleteDoc(doc(db, 'agendamentos', id));
         } catch {}
         try {
-          const qAg = query(collection(db, 'agendamentos'), where('id', '==', id));
+          const qAg = criarQueryUnidade('agendamentos', where('id', '==', id));
           const snap = await getDocs(qAg);
           snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
         } catch {}
@@ -1577,7 +1634,7 @@ export default function PainelLavaJato({
           await deleteDoc(doc(db, 'checklists', id));
         } catch {}
         try {
-          const qChk = query(collection(db, 'checklists'), where('id', '==', id));
+          const qChk = criarQueryUnidade('checklists', where('id', '==', id));
           const snap = await getDocs(qChk);
           snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
         } catch {}
@@ -1598,7 +1655,7 @@ export default function PainelLavaJato({
           await deleteDoc(doc(db, 'clientes', id));
         } catch {}
         try {
-          const qCli = query(collection(db, 'clientes'), where('id', '==', id));
+          const qCli = criarQueryUnidade('clientes', where('id', '==', id));
           const snap = await getDocs(qCli);
           snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
         } catch {}
@@ -1621,7 +1678,7 @@ export default function PainelLavaJato({
           await deleteDoc(doc(db, 'produtos', id));
         } catch {}
         try {
-          const qProd = query(collection(db, 'produtos'), where('id', '==', id));
+          const qProd = criarQueryUnidade('produtos', where('id', '==', id));
           const snap = await getDocs(qProd);
           snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
         } catch {}
@@ -1647,7 +1704,7 @@ export default function PainelLavaJato({
           await deleteDoc(doc(db, 'banners', id));
         } catch {}
         try {
-          const qBan = query(collection(db, 'banners'), where('id', '==', id));
+          const qBan = criarQueryUnidade('banners', where('id', '==', id));
           const snap = await getDocs(qBan);
           snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
         } catch {}
@@ -1669,7 +1726,7 @@ export default function PainelLavaJato({
           await deleteDoc(doc(db, 'servicos', id));
         } catch {}
         try {
-          const qSrv = query(collection(db, 'servicos'), where('id', '==', id));
+          const qSrv = criarQueryUnidade('servicos', where('id', '==', id));
           const snap = await getDocs(qSrv);
           snap.forEach(d => deleteDoc(d.ref).catch(() => {}));
         } catch {}
@@ -1773,7 +1830,7 @@ export default function PainelLavaJato({
           }, { merge: true });
         } catch {
           try {
-            const q = query(collection(db, 'agendamentos'), where('id', '==', agId));
+            const q = criarQueryUnidade('agendamentos', where('id', '==', agId));
             const snap = await getDocs(q);
             snap.forEach(d => updateDoc(d.ref, { status: statusAgendamento, statusLavagem: proximoStatus }).catch(() => {}));
           } catch {}
@@ -1900,7 +1957,7 @@ export default function PainelLavaJato({
         }, { merge: true });
       } catch {
         try {
-          const q = query(collection(db, 'agendamentos'), where('id', '==', ag.id));
+          const q = criarQueryUnidade('agendamentos', where('id', '==', ag.id));
           const snap = await getDocs(q);
           snap.forEach(d => updateDoc(d.ref, { status: 'Espera', statusLavagem: 'Espera' }).catch(() => {}));
         } catch {}
@@ -2027,7 +2084,7 @@ export default function PainelLavaJato({
 
       if (clienteAlvo.email) {
         try {
-          const snapEmail = await getDocs(query(collection(db, 'clientes'), where('email', '==', clienteAlvo.email)));
+          const snapEmail = await getDocs(criarQueryUnidade('clientes', where('email', '==', clienteAlvo.email)));
           snapEmail.forEach((docSnap: any) => {
             if (docSnap.id !== clienteAlvo.id && matchUnidade(docSnap.data())) {
               setDoc(docSnap.ref, sanitizarParaFirestore(patchDados), { merge: true }).catch(() => {});
@@ -2199,7 +2256,7 @@ export default function PainelLavaJato({
           });
         } catch {
           try {
-            const q = query(collection(db, 'agendamentos'), where('id', '==', id));
+            const q = criarQueryUnidade('agendamentos', where('id', '==', id));
             const snap = await getDocs(q);
             snap.forEach((d) =>
               updateDoc(d.ref, {
@@ -3317,12 +3374,24 @@ export default function PainelLavaJato({
               <ExternalLink size={12} className="opacity-80" />
             </button>
 
+            {/* IDENTIFICAÇÃO FIREBASE AUTH (UID ÚNICO) */}
+            {usuarioAuth && (
+              <div
+                className="hidden xl:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-[11px] text-slate-300"
+                title={`UID Firebase: ${usuarioAuth.uid}`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                <span className="max-w-[140px] truncate font-medium">{usuarioAuth.email || usuarioAuth.nome}</span>
+                <span className="text-[9px] font-mono text-cyan-400">#{usuarioAuth.uid.slice(0, 6)}</span>
+              </div>
+            )}
+
             {/* BOTÃO DE RETORNO AO LOGIN SEMPRE ATIVO NO TOPO */}
             <button
               type="button"
               onClick={onLogout}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 hover:text-white border border-rose-500/30 text-xs font-semibold transition cursor-pointer shadow-sm shadow-rose-950/50"
-              title="Voltar à tela de login / terminal OTP"
+              title="Voltar à tela de login / sair da conta"
             >
               <ArrowLeft size={14} />
               <span>Voltar ao Login</span>

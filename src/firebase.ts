@@ -6,9 +6,9 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
-  updateProfile,
-  onAuthStateChanged,
   signOut,
+  onAuthStateChanged,
+  updateProfile,
   type User as FirebaseUser
 } from 'firebase/auth';
 import {
@@ -25,19 +25,13 @@ import {
   query,
   where,
   orderBy,
-  limit,
-  getDocs
+  getDocs,
+  arrayUnion
 } from 'firebase/firestore';
 import appletConfig from '../firebase-applet-config.json';
 
-export const SUPER_ADMIN_EMAIL = 'enikersom2020@gmail.com';
-
-export function isEmailSuperAdmin(email?: string | null): boolean {
-  return Boolean(email && email.trim().toLowerCase() === SUPER_ADMIN_EMAIL);
-}
-
 // ============================================================================
-// CONFIGURAÇÃO DO FIREBASE FIRESTORE & AUTH (GOOGLE CLOUD)
+// CONFIGURAÇÃO DO FIREBASE AUTHENTICATION & CLOUD FIRESTORE
 // ============================================================================
 function carregarConfigFirebase() {
   // 1. Prioridade Máxima: Configuração provisionada automaticamente pelo AI Studio
@@ -103,22 +97,21 @@ function carregarConfigFirebase() {
 
 const { config: firebaseConfig, fonte: configFonte } = carregarConfigFirebase();
 
-// Inicialização segura do Firebase App, Auth e Firestore
+// Inicialização segura do Firebase
 const app = getApps().length > 0
   ? getApp()
   : initializeApp(firebaseConfig);
 
+// ➡️ Firebase Authentication (UID único por usuário)
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
+// ➡️ Banco de Dados Cloud Firestore (suporta banco padrão ou banco nomeado)
 const db = firebaseConfig.databaseId && firebaseConfig.databaseId !== '(default)'
   ? getFirestore(app, firebaseConfig.databaseId)
   : getFirestore(app);
 
-// ============================================================================
-// TRATAMENTO PADRONIZADO DE ERROS DE PERMISSÃO FIRESTORE
-// ============================================================================
 export enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',
@@ -145,12 +138,7 @@ export interface FirestoreErrorInfo {
   };
 }
 
-export function handleFirestoreError(
-  error: unknown,
-  operationType: OperationType,
-  path: string | null,
-  rethrow = false
-): FirestoreErrorInfo {
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -159,37 +147,34 @@ export function handleFirestoreError(
       emailVerified: auth.currentUser?.emailVerified,
       isAnonymous: auth.currentUser?.isAnonymous,
       tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map((provider) => ({
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
         providerId: provider.providerId,
         email: provider.email,
-      })) || [],
+      })) || []
     },
     operationType,
-    path,
+    path
   };
-  console.warn('Firestore Error:', JSON.stringify(errInfo));
-  if (rethrow) {
-    throw new Error(JSON.stringify(errInfo));
-  }
-  return errInfo;
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
 }
 
-// Teste inicial de conectividade com o Firestore conforme padrão da skill Firebase
 async function testConnection() {
-  if (typeof window === 'undefined') return;
   try {
-    await getDocFromServer(doc(db, 'teste_conexao', 'ping'));
+    await getDocFromServer(doc(db, 'teste_conexao', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.error('Please check your Firebase configuration.');
     }
   }
 }
-testConnection();
+if (typeof window !== 'undefined') {
+  testConnection().catch(() => {});
+}
 
-export function getFirebaseStatus(): {
-  configurado: boolean;
-  projectId: string;
+export function getFirebaseStatus(): { 
+  configurado: boolean; 
+  projectId: string; 
   fonte: 'applet' | 'env' | 'local' | 'demo';
   modoReal: boolean;
   databaseId?: string;
@@ -240,10 +225,9 @@ export {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
-  updateProfile,
-  onAuthStateChanged,
   signOut,
-  type FirebaseUser,
+  onAuthStateChanged,
+  updateProfile,
   db,
   collection,
   addDoc,
@@ -257,7 +241,9 @@ export {
   query,
   where,
   orderBy,
-  limit,
   getDocs,
+  arrayUnion,
   firebaseConfig
 };
+
+export type { FirebaseUser };

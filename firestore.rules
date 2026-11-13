@@ -2,71 +2,307 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // 🛑 BLOQUEIO PADRÃO INICIAL: Impede acesso a coleções desconhecidas
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 🔐 HELPERS DE AUTENTICAÇÃO E PERMISSÕES BASEADAS EM UID / UNIDADE
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function userDocPath() {
+      return /databases/$(database)/documents/usuarios/$(request.auth.uid);
+    }
+
+    function hasUserProfile() {
+      return isSignedIn() && exists(userDocPath());
+    }
+
+    function userProfile() {
+      return get(userDocPath()).data;
+    }
+
+    function isActiveUser() {
+      return hasUserProfile() && userProfile().ativo == true;
+    }
+
+    function isMasterAdmin() {
+      return isSignedIn() && (
+        (hasUserProfile() &&
+         userProfile().role == 'master' &&
+         userProfile().ativo == true) ||
+        (request.auth.token.email == 'enikersom2020@gmail.com' && request.auth.token.email_verified == true)
+      );
+    }
+
+    // Verifica se o UID autenticado possui permissão para a unidade solicitada
+    function hasUnitAccess(unidadeId) {
+      return isSignedIn() && (
+        isMasterAdmin() ||
+        (isActiveUser() &&
+         unidadeId is string &&
+         unidadeId.size() > 0 &&
+         (
+           userProfile().unidadeId == unidadeId ||
+           ('unidadesPermitidas' in userProfile() &&
+            userProfile().unidadesPermitidas is list &&
+            (unidadeId in userProfile().unidadesPermitidas || '*' in userProfile().unidadesPermitidas))
+         ))
+      );
+    }
+
+    // Verifica se o documento pertence à unidade permitida ao UID autenticado (ou ao próprio UID)
+    function hasDocUnitAccess(data) {
+      return isMasterAdmin() || (
+        isActiveUser() && (
+          ('ownerUid' in data && data.ownerUid == request.auth.uid) ||
+          ('unidadeId' in data && hasUnitAccess(data.unidadeId)) ||
+          ('unidadeVinculadaId' in data && hasUnitAccess(data.unidadeVinculadaId)) ||
+          ('unidadeSlug' in data && hasUnitAccess(data.unidadeSlug))
+        )
+      );
+    }
+
+    function hasValidUnidadeRef(data) {
+      return ('unidadeId' in data && data.unidadeId is string && data.unidadeId.size() >= 1 && data.unidadeId.size() <= 128) ||
+             ('unidadeVinculadaId' in data && data.unidadeVinculadaId is string && data.unidadeVinculadaId.size() >= 1 && data.unidadeVinculadaId.size() <= 128);
+    }
+
+    // 🧩 VALIDAÇÕES DE ESQUEMA POR ENTIDADE
+    function isValidUsuario(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'nome', 'role', 'unidadeId', 'unidadeNome', 'unidadesPermitidas', 'ativo']) &&
+        data.keys().hasOnly(['uid', 'email', 'nome', 'fotoUrl', 'role', 'unidadeId', 'unidadeNome', 'unidadesPermitidas', 'ativo', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid == userId && data.uid.size() <= 128 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.nome is string && data.nome.size() >= 1 && data.nome.size() <= 150 &&
+        data.role in ['master', 'lavajato', 'cliente'] &&
+        data.unidadeId is string && data.unidadeId.size() >= 1 && data.unidadeId.size() <= 128 &&
+        data.unidadeNome is string && data.unidadeNome.size() >= 1 && data.unidadeNome.size() <= 150 &&
+        data.unidadesPermitidas is list && data.unidadesPermitidas.size() >= 1 && data.unidadesPermitidas.size() <= 50 &&
+        data.unidadesPermitidas[0] is string &&
+        data.ativo is bool &&
+        (!('fotoUrl' in data) || (data.fotoUrl is string && data.fotoUrl.size() <= 1000)) &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidCliente(data) {
+      return hasValidUnidadeRef(data) &&
+        (('nome' in data && data.nome is string && data.nome.size() >= 1 && data.nome.size() <= 150) ||
+         ('ownerUid' in data && data.ownerUid is string && data.ownerUid.size() <= 128)) &&
+        (!('email' in data) || (data.email is string && data.email.size() <= 150)) &&
+        (!('pontosFidelidade' in data) || (data.pontosFidelidade is number && data.pontosFidelidade >= 0 && data.pontosFidelidade <= 10)) &&
+        (!('pontos' in data) || (data.pontos is number && data.pontos >= 0 && data.pontos <= 10));
+    }
+
+    function isValidAgendamento(data) {
+      return hasValidUnidadeRef(data) &&
+        data.veiculo is string && data.veiculo.size() >= 1 && data.veiculo.size() <= 200 &&
+        data.servico is string && data.servico.size() >= 1 && data.servico.size() <= 200 &&
+        data.status is string && data.status.size() >= 1 && data.status.size() <= 50;
+    }
+
+    function isValidBanner(data) {
+      return data.titulo is string && data.titulo.size() >= 1 && data.titulo.size() <= 200 &&
+        data.status in ['Ativo', 'Inativo'] &&
+        data.imagem is string && data.imagem.size() <= 900000;
+    }
+
+    function isValidServico(data) {
+      return data.nome is string && data.nome.size() >= 1 && data.nome.size() <= 150 &&
+        data.valor is number && data.valor >= 0 &&
+        data.ativo is bool;
+    }
+
+    function isValidChecklist(data) {
+      return data.veiculo is string && data.veiculo.size() >= 1 && data.veiculo.size() <= 200 &&
+        data.data is string && data.data.size() <= 50;
+    }
+
+    function isValidProduto(data) {
+      return data.nome is string && data.nome.size() >= 1 && data.nome.size() <= 150 &&
+        data.estoque is number && data.estoque >= 0 &&
+        data.categoria is string && data.categoria.size() <= 100 &&
+        (!('preco' in data) || (data.preco is number && data.preco >= 0)) &&
+        (!('precoVenda' in data) || (data.precoVenda is number && data.precoVenda >= 0));
+    }
+
+    function isValidVenda(data) {
+      return data.itens is list && data.itens.size() >= 1 && data.itens.size() <= 200 &&
+        data.total is number && data.total >= 0 &&
+        data.data is string && data.data.size() <= 50;
+    }
+
+    // 🛡️ USUÁRIOS & PERMISSÕES POR UNIDADE (SOMENTE PRÓPRIO PERFIL POR UID OU MASTER)
+    match /usuarios/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isMasterAdmin());
+      allow list: if isMasterAdmin();
+      allow create: if isValidId(userId) && isSignedIn() && isValidUsuario(incoming(), userId) && (
+        isMasterAdmin() ||
+        (isOwner(userId) &&
+         incoming().role == 'lavajato' &&
+         incoming().ativo == true &&
+         incoming().unidadesPermitidas.size() == 1 &&
+         incoming().unidadesPermitidas[0] == incoming().unidadeId)
+      );
+      allow update: if isValidId(userId) && isSignedIn() && isValidUsuario(incoming(), userId) && (
+        isMasterAdmin() ||
+        (isOwner(userId) &&
+         incoming().uid == existing().uid &&
+         incoming().role == existing().role &&
+         incoming().unidadeId == existing().unidadeId &&
+         incoming().unidadesPermitidas == existing().unidadesPermitidas &&
+         incoming().ativo == existing().ativo)
+      );
+      allow delete: if isValidId(userId) && isMasterAdmin();
+    }
+
     // 🏢 UNIDADES / LAVA-JATOS
     match /unidades/{unidadeId} {
-      allow read: if true;
-      allow write: if true;
+      allow get: if isValidId(unidadeId) && (
+        !isSignedIn() ||
+        isMasterAdmin() ||
+        !hasUserProfile() ||
+        hasUnitAccess(unidadeId)
+      );
+      allow list: if !isSignedIn() ||
+        isMasterAdmin() ||
+        !hasUserProfile() ||
+        (isActiveUser() && ('id' in existing() && hasUnitAccess(existing().id)));
+      allow create, delete: if isValidId(unidadeId) && isMasterAdmin();
+      allow update: if isValidId(unidadeId) && isSignedIn() && (
+        isMasterAdmin() ||
+        (hasUnitAccess(unidadeId) &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['nomeFantasia', 'contato', 'endereco', 'logoUrl', 'usuariosAutorizados']))
+      );
     }
 
-    // 👤 CLIENTES (Cadastro via celular PWA / QR Code e balcão)
+    // 👤 CLIENTES (Operadores autenticados só acessam sua unidade; PWA cliente QR-Code mantido compatível)
     match /clientes/{clienteId} {
-      allow read: if true;
-      allow write: if true;
+      allow get: if isValidId(clienteId) && (
+        isSignedIn()
+          ? (isMasterAdmin() || isOwner(clienteId) || hasDocUnitAccess(existing()))
+          : hasValidUnidadeRef(existing())
+      );
+      allow list: if isSignedIn()
+        ? (isMasterAdmin() || hasDocUnitAccess(existing()))
+        : true;
+      allow create: if isValidId(clienteId) && isValidCliente(incoming()) && (
+        isSignedIn()
+          ? (isMasterAdmin() || (isOwner(clienteId) && incoming().ownerUid == request.auth.uid) || hasDocUnitAccess(incoming()))
+          : hasValidUnidadeRef(incoming())
+      );
+      allow update: if isValidId(clienteId) && isValidCliente(incoming()) && (
+        isSignedIn()
+          ? (isMasterAdmin() || isOwner(clienteId) || (hasDocUnitAccess(existing()) && hasDocUnitAccess(incoming())))
+          : (hasValidUnidadeRef(existing()) && hasValidUnidadeRef(incoming()))
+      );
+      allow delete: if isValidId(clienteId) && isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
     }
 
-    // 📅 AGENDAMENTOS (Agendamento online e fila)
+    // 📅 AGENDAMENTOS (Operadores autenticados só acessam sua unidade; PWA cliente QR-Code mantido compatível)
     match /agendamentos/{agendamentoId} {
-      allow read: if true;
-      allow write: if true;
+      allow get: if isValidId(agendamentoId) && (
+        isSignedIn()
+          ? (isMasterAdmin() || hasDocUnitAccess(existing()))
+          : hasValidUnidadeRef(existing())
+      );
+      allow list: if isSignedIn()
+        ? (isMasterAdmin() || hasDocUnitAccess(existing()))
+        : true;
+      allow create: if isValidId(agendamentoId) && isValidAgendamento(incoming()) && (
+        isSignedIn()
+          ? (isMasterAdmin() || hasDocUnitAccess(incoming()))
+          : hasValidUnidadeRef(incoming())
+      );
+      allow update: if isValidId(agendamentoId) && isValidAgendamento(incoming()) && (
+        isSignedIn()
+          ? (isMasterAdmin() || (hasDocUnitAccess(existing()) && hasDocUnitAccess(incoming())))
+          : (hasValidUnidadeRef(existing()) && hasValidUnidadeRef(incoming()))
+      );
+      allow delete: if isValidId(agendamentoId) && (
+        isSignedIn()
+          ? (isMasterAdmin() || hasDocUnitAccess(existing()))
+          : hasValidUnidadeRef(existing())
+      );
     }
 
-    // 🖼️ BANNERS PROMOCIONAIS
+    // 🖼️ BANNERS PROMOCIONAIS (Leitura pública para App Cliente; gravação restrita ao UID da unidade)
     match /banners/{bannerId} {
-      allow read: if true;
-      allow write: if true;
+      allow get: if isValidId(bannerId) && (!isSignedIn() || isMasterAdmin() || hasDocUnitAccess(existing()));
+      allow list: if !isSignedIn() || isMasterAdmin() || hasDocUnitAccess(existing());
+      allow create: if isValidId(bannerId) && isSignedIn() && isValidBanner(incoming()) && (isMasterAdmin() || hasDocUnitAccess(incoming()));
+      allow update: if isValidId(bannerId) && isSignedIn() && isValidBanner(incoming()) && (isMasterAdmin() || (hasDocUnitAccess(existing()) && hasDocUnitAccess(incoming())));
+      allow delete: if isValidId(bannerId) && isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
     }
 
-    // 🏷️ SERVIÇOS E PREÇOS
+    // 🏷️ SERVIÇOS E PREÇOS (Leitura pública para App Cliente; gravação restrita ao UID da unidade)
     match /servicos/{servicoId} {
-      allow read: if true;
-      allow write: if true;
+      allow get: if isValidId(servicoId) && (!isSignedIn() || isMasterAdmin() || hasDocUnitAccess(existing()));
+      allow list: if !isSignedIn() || isMasterAdmin() || hasDocUnitAccess(existing());
+      allow create: if isValidId(servicoId) && isSignedIn() && isValidServico(incoming()) && (isMasterAdmin() || hasDocUnitAccess(incoming()));
+      allow update: if isValidId(servicoId) && isSignedIn() && isValidServico(incoming()) && (isMasterAdmin() || (hasDocUnitAccess(existing()) && hasDocUnitAccess(incoming())));
+      allow delete: if isValidId(servicoId) && isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
     }
 
-    // 🔌 TESTE DE CONEXÃO
-    match /teste_conexao/{docId} {
-      allow read, write: if true;
-    }
-
-    // 📋 VISTORIAS E CHECKLISTS COM FOTOS
+    // 📋 VISTORIAS E CHECKLISTS (Exclusivo usuários autenticados da unidade ou Master)
     match /checklists/{checklistId} {
-      allow read, write: if true;
+      allow get: if isValidId(checklistId) && isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
+      allow list: if isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
+      allow create: if isValidId(checklistId) && isSignedIn() && isValidChecklist(incoming()) && (isMasterAdmin() || hasDocUnitAccess(incoming()));
+      allow update: if isValidId(checklistId) && isSignedIn() && isValidChecklist(incoming()) && (isMasterAdmin() || (hasDocUnitAccess(existing()) && hasDocUnitAccess(incoming())));
+      allow delete: if isValidId(checklistId) && isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
     }
 
-    // 📦 PRODUTOS & ESTOQUE
+    // 📦 PRODUTOS & ESTOQUE (Exclusivo usuários autenticados da unidade ou Master)
     match /produtos/{produtoId} {
-      allow read, write: if true;
+      allow get: if isValidId(produtoId) && isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
+      allow list: if isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
+      allow create: if isValidId(produtoId) && isSignedIn() && isValidProduto(incoming()) && (isMasterAdmin() || hasDocUnitAccess(incoming()));
+      allow update: if isValidId(produtoId) && isSignedIn() && isValidProduto(incoming()) && (isMasterAdmin() || (hasDocUnitAccess(existing()) && hasDocUnitAccess(incoming())));
+      allow delete: if isValidId(produtoId) && isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
     }
 
-    // 🛒 VENDAS DO PDV (FRENTE DE CAIXA)
+    // 🛒 VENDAS DO PDV (Exclusivo usuários autenticados da unidade ou Master)
     match /vendas/{vendaId} {
-      allow read, write: if true;
+      allow get: if isValidId(vendaId) && isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
+      allow list: if isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
+      allow create: if isValidId(vendaId) && isSignedIn() && isValidVenda(incoming()) && (isMasterAdmin() || hasDocUnitAccess(incoming()));
+      allow update: if isValidId(vendaId) && isSignedIn() && isValidVenda(incoming()) && (isMasterAdmin() || (hasDocUnitAccess(existing()) && hasDocUnitAccess(incoming())));
+      allow delete: if isValidId(vendaId) && isSignedIn() && (isMasterAdmin() || hasDocUnitAccess(existing()));
     }
 
-    // ⚙️ CONFIGURAÇÕES E SEGURANÇA (Senha Master e parâmetros globais)
+    // ⚙️ CONFIGURAÇÕES E SEGURANÇA (Exclusivo Master Admin)
     match /configuracoes/{configId} {
-      allow read, write: if true;
+      allow read, write: if isValidId(configId) && isMasterAdmin();
     }
 
-    // 🔔 DISPOSITIVOS FCM (Tokens de notificação Push Web/Mobile)
+    // 🔔 DISPOSITIVOS FCM (Mantida acessível para registro de tokens Push Web/Mobile)
     match /dispositivos_fcm/{tokenId} {
       allow read, write: if true;
     }
 
-    // 🛑 BLOQUEIO PADRÃO: Impede criação de coleções desconhecidas
-    match /{document=**} {
-      allow read, write: if false;
+    // 🔌 TESTE DE CONEXÃO DO SDK
+    match /teste_conexao/{docId} {
+      allow read, write: if true;
     }
   }
 }
-
-
